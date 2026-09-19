@@ -54,9 +54,13 @@ void input_poll(app_state *app)
     unsigned int b = pad.buttons;
     unsigned int pressed = b & ~s_prev; /* rising edges */
 
+    /* Deadzones: generous, because Vita analog sticks rest off-centre and a
+     * small resting drift was silently retuning / draining the volume. */
+    const int dead = 40;    /* left stick (tuning) */
+    const int rdead = 55;   /* right stick (volume/squelch), needs more margin */
+
     /* ---- analog tuning (left stick X) ---- */
     int dx = (int)pad.lx - 128;
-    const int dead = 30;
     if (dx > dead || dx < -dead) {
         int sign = (dx > 0) ? 1 : -1;
         float norm = (float)(((dx > 0) ? dx : -dx) - dead) / (float)(127 - dead);
@@ -71,14 +75,14 @@ void input_poll(app_state *app)
 
     /* ---- right stick: volume (X), squelch (Y) ---- */
     int rx = (int)pad.rx - 128;
-    if (rx > dead)      { app->volume += 1; }
-    else if (rx < -dead){ app->volume -= 1; }
+    if (rx > rdead)      { app->volume += 1; }
+    else if (rx < -rdead){ app->volume -= 1; }
     if (app->volume < 0) app->volume = 0;
     if (app->volume > 100) app->volume = 100;
 
     int ry = (int)pad.ry - 128;
-    if (ry < -dead)     { app->squelch += 1; }   /* up = increase */
-    else if (ry > dead) { app->squelch -= 1; }
+    if (ry < -rdead)     { app->squelch += 1; }   /* up = increase */
+    else if (ry > rdead) { app->squelch -= 1; }
     if (app->squelch < 0) app->squelch = 0;
     if (app->squelch > 100) app->squelch = 100;
 

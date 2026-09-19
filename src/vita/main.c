@@ -21,7 +21,7 @@
 
 static app_state g_app;
 
-#define JITTER_CAP (48000 * 2)   /* ~4 s at 12 kHz, headroom */
+#define JITTER_CAP (12000 * 2)   /* 2 s at 12 kHz: smooths jitter, caps latency */
 
 static uint64_t now_ms(void)
 {
@@ -72,7 +72,8 @@ int net_thread(SceSize args, void *argp)
                 if (rc == 0) {
                     connected = 1;
                     g_app.conn_status = CONN_CONNECTED;
-                    audio_start(&g_app);
+                    if (audio_start(&g_app) != 0)
+                        vlog("audio_start FAILED (no sound)");
                     last_freq = f;
                     strncpy(last_mode, m, sizeof(last_mode));
                     last_ka = last_tune = last_stat = conn_start = now_ms();
@@ -153,6 +154,7 @@ int net_thread(SceSize args, void *argp)
 
         if (g_app.cmd_disconnect) {
             g_app.cmd_disconnect = 0;
+            vlog("cmd_disconnect (user)");
             net_disconnect(&k, &connected, 0);
             continue;
         }
@@ -195,7 +197,8 @@ int wf_thread(SceSize args, void *argp)
     static kiwi_wf w;
     int wf_conn = 0;
     double last_freq = 0;
-    uint64_t last_ka = 0, last_center = 0;
+    uint64_t last_ka = 0, last_center = 0, wf_start = 0;
+    unsigned long wf_frames = 0;
     static unsigned char bins[KIWI_WF_BINS];
 
     while (g_app.running) {
@@ -210,7 +213,8 @@ int wf_thread(SceSize args, void *argp)
             if (wrc == 0) {
                 wf_conn = 1;
                 last_freq = f;
-                last_ka = last_center = now_ms();
+                last_ka = last_center = wf_start = now_ms();
+                wf_frames = 0;
             } else {
                 sceKernelDelayThread(500 * 1000);
             }
@@ -220,6 +224,9 @@ int wf_thread(SceSize args, void *argp)
         } else if (wf_conn) {
             int nb = kiwi_wf_poll(&w, bins, KIWI_WF_BINS, 100);
             if (nb < 0) {
+                vlog("wf DROP after %lu ms, frames=%lu, rx_bytes=%u close=%d net=%d",
+                     (unsigned long)(now_ms() - wf_start), wf_frames,
+                     w.ws.dbg_rx_bytes, w.ws.dbg_close_frame, w.ws.dbg_net_result);
                 kiwi_wf_disconnect(&w);
                 wf_conn = 0;
                 continue;
@@ -228,6 +235,8 @@ int wf_thread(SceSize args, void *argp)
                 memcpy(g_app.wf_bins, bins, (size_t)nb);
                 g_app.wf_nbins = nb;
                 g_app.wf_have_row = 1;
+                if ((++wf_frames % 30) == 0)
+                    vlog("wf frames=%lu (nb=%d)", wf_frames, nb);
             }
             uint64_t t = now_ms();
             if (t - last_center >= 200) {

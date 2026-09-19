@@ -285,6 +285,12 @@ int kiwi_wf_connect(kiwi_wf *w, const char *host, int port,
         ws_close(&w->ws);
         return -1;
     }
+
+    /* Send the waterfall setup immediately after auth. Waiting for a server
+     * MSG (the old behaviour) left the channel unconfigured and the receiver
+     * closed it after a few seconds. SET commands are queued server-side, so
+     * sending now is safe; kiwi_wf_poll re-sends on the first MSG as a backup. */
+    wf_send_config(w);
     return 0;
 }
 
