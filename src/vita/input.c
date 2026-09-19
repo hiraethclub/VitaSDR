@@ -1,15 +1,16 @@
 /* Hardware input: buttons and analog sticks. Maps to tuning, volume, squelch,
- * mode/step cycling, and connect/disconnect. A subset of the full remappable
- * scheme; the defaults that matter for basic operation.
+ * mode/step cycling, and connect/disconnect.
  *
- * Controls:
- *   Left stick L/R   tune (accelerated: gentle = fine, full = fast)
- *   D-pad L/R        cycle tuning step
- *   Right stick L/R  volume      Right stick U/D  squelch
+ * Tuning is designed for precision:
+ *   D-pad L/R        tune down/up by exactly one step (auto-repeats when held)
+ *   D-pad U/D        change the tuning step (1 Hz .. 100 kHz)
+ *   Left stick L/R   gentle sweep, grid-snapped, rate scales with deflection
+ *   Right stick L/R  volume       Right stick U/D  squelch
  *   L + R together   cycle demodulation mode
  *   Start            connect / disconnect
  *   Select           toggle spectrum
  *   Circle           exit
+ * All tuning snaps to the current step grid so it lands on clean frequencies.
  */
 #include "app.h"
 
@@ -23,7 +24,12 @@ static const int  NSTEPS = (int)(sizeof(STEPS) / sizeof(STEPS[0]));
 static const char *MODES[] = { "usb", "lsb", "am", "cw", "nbfm" };
 static const int  NMODES = (int)(sizeof(MODES) / sizeof(MODES[0]));
 
+/* Full-deflection analog sweep speed, in tuning steps per second. */
+#define SWEEP_MAX_SPS 60.0
+
 static unsigned int s_prev = 0;
+static double s_accum = 0.0;   /* fractional-step accumulator for analog sweep */
+static int    s_hold = 0;      /* frames a D-pad tune direction has been held */
 
 static int step_index(int step_hz)
 {
@@ -41,10 +47,29 @@ static int mode_index(const char *mode)
     return 0;
 }
 
+/* Move by `steps` tuning steps and snap onto the step grid so we land on clean
+ * multiples (e.g. exact kHz). */
+static void tune_by(app_state *app, long steps)
+{
+    if (steps == 0)
+        return;
+    sceKernelLockMutex(app->lock, 1, NULL);
+    long step = app->step_hz > 0 ? app->step_hz : 1;
+    long hz = (long)(app->freq_khz * 1000.0 + 0.5);
+    hz += steps * step;
+    hz = ((hz + step / 2) / step) * step;   /* snap to nearest grid point */
+    if (hz < 0) hz = 0;
+    if (hz > 30000000L) hz = 30000000L;
+    app->freq_khz = (double)hz / 1000.0;
+    sceKernelUnlockMutex(app->lock, 1);
+}
+
 void input_init(void)
 {
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     s_prev = 0;
+    s_accum = 0.0;
+    s_hold = 0;
 }
 
 void input_poll(app_state *app)
@@ -54,23 +79,50 @@ void input_poll(app_state *app)
     unsigned int b = pad.buttons;
     unsigned int pressed = b & ~s_prev; /* rising edges */
 
-    /* Deadzones: generous, because Vita analog sticks rest off-centre and a
-     * small resting drift was silently retuning / draining the volume. */
-    const int dead = 40;    /* left stick (tuning) */
-    const int rdead = 55;   /* right stick (volume/squelch), needs more margin */
+    /* Deadzones: generous, because Vita analog sticks rest off-centre. */
+    const int dead = 40;    /* left stick (tuning sweep) */
+    const int rdead = 55;   /* right stick (volume/squelch) */
 
-    /* ---- analog tuning (left stick X) ---- */
+    /* ---- D-pad L/R: precise single-step tuning, with hold auto-repeat ---- */
+    int dir = (b & SCE_CTRL_RIGHT) ? 1 : ((b & SCE_CTRL_LEFT) ? -1 : 0);
+    if (dir != 0) {
+        s_hold++;
+        int fire = (pressed & (SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) != 0; /* initial */
+        if (!fire && s_hold > 20 && (s_hold % 4) == 0)
+            fire = 1; /* repeat ~15/s after a ~0.33s delay */
+        if (fire)
+            tune_by(app, dir);
+    } else {
+        s_hold = 0;
+    }
+
+    /* ---- D-pad U/D: change tuning step ---- */
+    if (pressed & SCE_CTRL_UP) {
+        int i = step_index(app->step_hz);
+        app->step_hz = STEPS[(i + 1) % NSTEPS];
+    }
+    if (pressed & SCE_CTRL_DOWN) {
+        int i = step_index(app->step_hz);
+        app->step_hz = STEPS[(i - 1 + NSTEPS) % NSTEPS];
+    }
+
+    /* ---- Left stick X: gentle grid-snapped sweep ---- */
     int dx = (int)pad.lx - 128;
     if (dx > dead || dx < -dead) {
         int sign = (dx > 0) ? 1 : -1;
         float norm = (float)(((dx > 0) ? dx : -dx) - dead) / (float)(127 - dead);
         if (norm > 1.0f) norm = 1.0f;
-        long delta_hz = (long)(app->step_hz + norm * norm * 20000.0f);
-        sceKernelLockMutex(app->lock, 1, NULL);
-        app->freq_khz += (double)(sign * delta_hz) / 1000.0;
-        if (app->freq_khz < 0) app->freq_khz = 0;
-        if (app->freq_khz > 30000.0) app->freq_khz = 30000.0;
-        sceKernelUnlockMutex(app->lock, 1);
+        /* steps/sec grows with the square of deflection: fine near centre,
+         * fast at the edge. ~1/60 s per frame. */
+        double sps = (double)norm * norm * SWEEP_MAX_SPS;
+        s_accum += (double)sign * sps / 60.0;
+        long whole = (long)s_accum;
+        if (whole != 0) {
+            s_accum -= (double)whole;
+            tune_by(app, whole);
+        }
+    } else {
+        s_accum = 0.0;
     }
 
     /* ---- right stick: volume (X), squelch (Y) ---- */
@@ -85,16 +137,6 @@ void input_poll(app_state *app)
     else if (ry > rdead) { app->squelch -= 1; }
     if (app->squelch < 0) app->squelch = 0;
     if (app->squelch > 100) app->squelch = 100;
-
-    /* ---- D-pad L/R: tuning step ---- */
-    if (pressed & SCE_CTRL_RIGHT) {
-        int i = step_index(app->step_hz);
-        app->step_hz = STEPS[(i + 1) % NSTEPS];
-    }
-    if (pressed & SCE_CTRL_LEFT) {
-        int i = step_index(app->step_hz);
-        app->step_hz = STEPS[(i - 1 + NSTEPS) % NSTEPS];
-    }
 
     /* ---- L + R: cycle mode ---- */
     int lr_now = (b & SCE_CTRL_LTRIGGER) && (b & SCE_CTRL_RTRIGGER);

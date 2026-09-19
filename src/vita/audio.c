@@ -20,6 +20,7 @@
 
 #define OUT_RATE   48000
 #define OUT_GRAIN  512    /* samples per channel per output (multiple of 64) */
+#define AUDIO_MAX_GAIN 8  /* max software gain at volume=100 (radio audio is low) */
 
 static app_state *s_app = NULL;
 static int        s_port = -1;
@@ -54,12 +55,19 @@ static int audio_thread(SceSize args, void *argp)
         if (vol < 0) vol = 0;
         if (vol > 100) vol = 100;
 
-        /* Upsample need -> OUT_GRAIN (nearest neighbour), mono -> stereo,
-         * apply volume. */
+        /* Volume is a GAIN, not just attenuation: receiver audio (SSB/AM) sits
+         * well below full scale, so unity is too quiet. Map the slider to
+         * 0..MAX_GAIN and clamp to int16 (peaks clip rather than wrap).
+         * gain is fixed-point x256. */
+        int gain = vol * (AUDIO_MAX_GAIN * 256) / 100;
+
+        /* Upsample need -> OUT_GRAIN (nearest neighbour), mono -> stereo. */
         for (int i = 0; i < OUT_GRAIN; i++) {
             int si = (int)((long)i * need / OUT_GRAIN);
             if (si >= need) si = need - 1;
-            int s = ((int)src[si] * vol) / 100;
+            int s = ((int)src[si] * gain) >> 8;
+            if (s > 32767) s = 32767;
+            else if (s < -32768) s = -32768;
             out[i * 2]     = (int16_t)s;
             out[i * 2 + 1] = (int16_t)s;
         }
