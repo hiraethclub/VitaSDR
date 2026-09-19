@@ -56,6 +56,7 @@ typedef struct {
 
     /* ---- status mirrored from worker threads ---- */
     volatile int   conn_status;
+    char           last_err[64];   /* human-readable reason when conn_status==ERROR */
     volatile float rssi_dbm;
     volatile int   smeter_raw;
     volatile unsigned long samples_rx;

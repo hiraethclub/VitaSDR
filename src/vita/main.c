@@ -15,6 +15,7 @@
 
 #include <vita2d.h>
 
+#include <stdio.h>
 #include <string.h>
 
 static app_state g_app;
@@ -64,8 +65,9 @@ int net_thread(SceSize args, void *argp)
                 char m[8]; strncpy(m, g_app.mode, sizeof(m)); m[7] = '\0';
                 sceKernelUnlockMutex(g_app.lock, 1);
 
-                if (kiwi_connect(&k, g_app.host, g_app.port, g_app.password,
-                                 &g_app.jitter, f, m, 6000) == 0) {
+                int rc = kiwi_connect(&k, g_app.host, g_app.port,
+                                      g_app.password, &g_app.jitter, f, m, 6000);
+                if (rc == 0) {
                     connected = 1;
                     g_app.conn_status = CONN_CONNECTED;
                     audio_start(&g_app);
@@ -74,8 +76,26 @@ int net_thread(SceSize args, void *argp)
                     last_ka = last_tune = now_ms();
                     ui_show_message(&g_app, "connected");
                 } else {
+                    const char *why;
+                    switch (rc) {
+                    case WS_CONNECT_ETCP:
+                        switch (net_last_fail_stage()) {
+                        case NET_STAGE_RESOLVE: why = "DNS lookup failed"; break;
+                        case NET_STAGE_SOCKET:  why = "socket create failed"; break;
+                        case NET_STAGE_CONNECT: why = "TCP connect refused/timeout"; break;
+                        default:                why = "TCP connect failed"; break;
+                        }
+                        break;
+                    case WS_CONNECT_ESEND:   why = "request send failed"; break;
+                    case WS_CONNECT_ENORESP: why = "no HTTP response"; break;
+                    case WS_CONNECT_ESTATUS: why = "not a websocket (bad HTTP status)"; break;
+                    case WS_CONNECT_EACCEPT: why = "bad ws accept key"; break;
+                    case -6:                 why = "auth send failed"; break;
+                    default:                 why = "connect failed"; break;
+                    }
+                    snprintf(g_app.last_err, sizeof(g_app.last_err), "%s", why);
                     g_app.conn_status = CONN_ERROR;
-                    ui_show_message(&g_app, "connect failed (Start to retry)");
+                    ui_show_message(&g_app, why);
                 }
             } else {
                 sceKernelDelayThread(50 * 1000);
@@ -214,9 +234,12 @@ int main(int argc, char *argv[])
         return -1;
     g_app.lock = sceKernelCreateMutex("vitasdr_lock", 0, 0, NULL);
 
-    if (net_global_init() != 0) {
+    int net_ok = (net_global_init() == 0);
+    if (!net_ok) {
         /* Networking unavailable; still show the UI with an error state. */
         g_app.conn_status = CONN_ERROR;
+        snprintf(g_app.last_err, sizeof(g_app.last_err),
+                 "network init failed (WiFi on?)");
     }
 
     vita2d_init();
@@ -231,11 +254,13 @@ int main(int argc, char *argv[])
     sceKernelStartThread(net_tid, 0, NULL);
     sceKernelStartThread(wf_tid, 0, NULL);
 
-    /* Auto-connect on launch if a host is configured (config_load guarantees a
-     * real default, upgrading the old placeholder automatically). */
-    if (g_app.host[0]) {
+    /* Auto-connect on launch if the network is up and a host is configured
+     * (config_load guarantees a real default). */
+    if (net_ok && g_app.host[0]) {
         g_app.cmd_connect = 1;
         ui_show_message(&g_app, g_app.host);
+    } else if (!net_ok) {
+        ui_show_message(&g_app, "no network - check WiFi");
     } else {
         ui_show_message(&g_app, "Set host in ux0:data/vitasdr/config.ini");
     }

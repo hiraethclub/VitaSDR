@@ -36,8 +36,18 @@ typedef struct {
     size_t   in_len;             /* valid bytes in `in` */
 } ws_client;
 
+/* ws_connect failure codes (all negative). */
+enum {
+    WS_CONNECT_OK        =  0,
+    WS_CONNECT_ETCP      = -1, /* couldn't establish TCP (see net_last_fail_stage) */
+    WS_CONNECT_ESEND     = -2, /* failed to send the upgrade request */
+    WS_CONNECT_ENORESP   = -3, /* no/incomplete HTTP response */
+    WS_CONNECT_ESTATUS   = -4, /* response was not HTTP 101 Switching Protocols */
+    WS_CONNECT_EACCEPT   = -5  /* Sec-WebSocket-Accept mismatch */
+};
+
 /* Connect to ws://host:port/path and complete the WebSocket handshake.
- * `origin` may be NULL. Returns 0 on success, <0 on failure. */
+ * `origin` may be NULL. Returns 0 on success, or a negative WS_CONNECT_* code. */
 int ws_connect(ws_client *ws, const char *host, int port, const char *path,
                const char *origin, int timeout_ms);
 

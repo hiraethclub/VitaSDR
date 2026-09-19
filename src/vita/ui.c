@@ -137,14 +137,26 @@ static void draw_ruler(app_state *app)
     double span_khz = 30000.0 / (double)(1 << app->zoom); /* ~ADC max / 2^zoom */
     double lo = app->freq_khz - span_khz / 2.0;
     int ry = BOTTOM_Y;
-    vita2d_draw_rectangle(0, ry, SCREEN_W * 2 / 3, BOTTOM_H,
-                          RGBA8(18, 20, 26, 255));
+    int panel_w = SCREEN_W * 2 / 3;
+    const int pad = 6;
+    vita2d_draw_rectangle(0, ry, panel_w, BOTTOM_H, RGBA8(18, 20, 26, 255));
+
     for (int t = 0; t <= 4; t++) {
         double f = lo + span_khz * t / 4.0;
-        int x = (SCREEN_W * 2 / 3) * t / 4;
-        if (x > 6) x -= 6;
-        vita2d_pgf_draw_textf(s_font, x, ry + 20, COL_DIM, 0.7f,
-                              "%.0f", f);
+        char lbl[16];
+        snprintf(lbl, sizeof(lbl), "%.0f", f);
+
+        /* Centre the label on its tick, but clamp so the first/last labels stay
+         * inside the panel instead of clipping into the slider column. */
+        int est_w = (int)strlen(lbl) * 8; /* approx width at 0.7 scale */
+        int center = panel_w * t / 4;
+        int x = center - est_w / 2;
+        if (x < pad)
+            x = pad;
+        if (x + est_w > panel_w - pad)
+            x = panel_w - pad - est_w;
+
+        vita2d_pgf_draw_textf(s_font, x, ry + 20, COL_DIM, 0.7f, "%s", lbl);
     }
 }
 
@@ -175,6 +187,12 @@ void ui_draw(app_state *app)
     draw_ruler(app);
     draw_sliders(app);
     draw_status_bar(app);
+
+    /* Persistent error reason while disconnected in the error state. */
+    if (app->conn_status == CONN_ERROR && app->last_err[0]) {
+        vita2d_pgf_draw_textf(s_font, 8, WF_Y + 24, COL_RED, 0.9f,
+                              "ERR: %s  (Start to retry)", app->last_err);
+    }
 
     if (s_msg_frames > 0) {
         vita2d_draw_rectangle(0, SCREEN_H / 2 - 18, SCREEN_W, 36,

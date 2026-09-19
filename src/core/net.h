@@ -21,6 +21,17 @@ enum {
     NET_TIMEOUT = -2   /* no data within the timeout, connection still open */
 };
 
+/* Which stage of net_tcp_connect last failed (for diagnostics). */
+enum {
+    NET_STAGE_NONE = 0,
+    NET_STAGE_RESOLVE,   /* DNS lookup failed */
+    NET_STAGE_SOCKET,    /* socket() failed */
+    NET_STAGE_CONNECT    /* connect() failed / timed out */
+};
+
+/* Returns the stage recorded by the most recent failed net_tcp_connect. */
+int net_last_fail_stage(void);
+
 /* One-time global init/teardown. On POSIX these are no-ops; on the Vita they
  * load the net module and bring up the stack. Return 0 on success, <0 on error. */
 int  net_global_init(void);

@@ -19,6 +19,12 @@
 
 static char  s_net_pool[NET_POOL_SIZE] __attribute__((aligned(16)));
 static int   s_net_up = 0;
+static int   s_fail_stage = NET_STAGE_NONE;
+
+int net_last_fail_stage(void)
+{
+    return s_fail_stage;
+}
 
 int net_global_init(void)
 {
@@ -71,14 +77,20 @@ static int resolve_host(const char *host, SceNetInAddr *out)
 
 int net_tcp_connect(const char *host, int port, int timeout_ms)
 {
+    s_fail_stage = NET_STAGE_NONE;
+
     SceNetInAddr addr;
-    if (resolve_host(host, &addr) != 0)
+    if (resolve_host(host, &addr) != 0) {
+        s_fail_stage = NET_STAGE_RESOLVE;
         return NET_ERR;
+    }
 
     int sock = sceNetSocket("vitasdr_tcp", SCE_NET_AF_INET, SCE_NET_SOCK_STREAM,
                             0);
-    if (sock < 0)
+    if (sock < 0) {
+        s_fail_stage = NET_STAGE_SOCKET;
         return NET_ERR;
+    }
 
     /* Bound connect wait: use non-blocking connect + epoll for writability. */
     int nb = 1;
@@ -94,7 +106,11 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
     if (ret < 0) {
         /* In progress: wait for writability via epoll. */
         int ep = sceNetEpollCreate("vitasdr_ep", 0);
-        if (ep < 0) { sceNetSocketClose(sock); return NET_ERR; }
+        if (ep < 0) {
+            s_fail_stage = NET_STAGE_CONNECT;
+            sceNetSocketClose(sock);
+            return NET_ERR;
+        }
         SceNetEpollEvent ev;
         memset(&ev, 0, sizeof(ev));
         ev.events = SCE_NET_EPOLLOUT;
@@ -105,13 +121,21 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
         memset(&out_ev, 0, sizeof(out_ev));
         int n = sceNetEpollWait(ep, &out_ev, 1, timeout_ms * 1000);
         sceNetEpollDestroy(ep);
-        if (n <= 0) { sceNetSocketClose(sock); return NET_ERR; }
+        if (n <= 0) {
+            s_fail_stage = NET_STAGE_CONNECT;
+            sceNetSocketClose(sock);
+            return NET_ERR;
+        }
 
         /* Check the connection actually succeeded. */
         int err = 0;
         unsigned int elen = sizeof(err);
         sceNetGetsockopt(sock, SCE_NET_SOL_SOCKET, SCE_NET_SO_ERROR, &err, &elen);
-        if (err != 0) { sceNetSocketClose(sock); return NET_ERR; }
+        if (err != 0) {
+            s_fail_stage = NET_STAGE_CONNECT;
+            sceNetSocketClose(sock);
+            return NET_ERR;
+        }
     }
 
     /* Back to blocking, with TCP_NODELAY for low-latency control. */

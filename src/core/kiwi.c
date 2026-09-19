@@ -73,8 +73,9 @@ int kiwi_connect(kiwi_client *k, const char *host, int port,
     char path[32];
     snprintf(path, sizeof(path), "/%ld/SND", (long)time(NULL));
 
-    if (ws_connect(&k->ws, host, port, path, NULL, timeout_ms) != 0)
-        return -1;
+    int rc = ws_connect(&k->ws, host, port, path, NULL, timeout_ms);
+    if (rc != 0)
+        return rc; /* negative WS_CONNECT_* code, propagated for diagnostics */
 
     /* First substantive message is auth. */
     char auth[128];
@@ -82,7 +83,7 @@ int kiwi_connect(kiwi_client *k, const char *host, int port,
              password ? password : "");
     if (send_set(k, auth) != 0) {
         ws_close(&k->ws);
-        return -1;
+        return -6; /* connected but failed to send auth */
     }
     return 0;
 }

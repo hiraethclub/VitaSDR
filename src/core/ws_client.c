@@ -125,7 +125,7 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
 
     int fd = net_tcp_connect(host, port, timeout_ms);
     if (fd < 0)
-        return -1;
+        return WS_CONNECT_ETCP;
 
     /* Build a client key: 16 pseudo-random bytes, base64-encoded. This does
      * not need cryptographic strength; it only echoes back in the accept. */
@@ -152,12 +152,12 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         origin ? "Origin: " : "", origin ? origin : "", origin ? "\r\n" : "");
     if (n < 0 || (size_t)n >= sizeof(req)) {
         net_close(fd);
-        return -1;
+        return WS_CONNECT_ESEND;
     }
 
     if (net_send_all(fd, req, (size_t)n) != 0) {
         net_close(fd);
-        return -1;
+        return WS_CONNECT_ESEND;
     }
 
     /* Read the response headers up to the terminating blank line. */
@@ -170,7 +170,7 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
             continue;
         if (r <= 0) {
             net_close(fd);
-            return -1;
+            return WS_CONNECT_ENORESP;
         }
         rlen += (size_t)r;
         resp[rlen] = '\0';
@@ -182,14 +182,14 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
     }
     if (header_end < 0) {
         net_close(fd);
-        return -1;
+        return WS_CONNECT_ENORESP;
     }
 
     /* Require a 101 status. */
     if (strncmp(resp, "HTTP/1.1 101", 12) != 0 &&
         strncmp(resp, "HTTP/1.0 101", 12) != 0) {
         net_close(fd);
-        return -1;
+        return WS_CONNECT_ESTATUS;
     }
 
     /* If the server sent Sec-WebSocket-Accept, verify it. */
@@ -207,7 +207,7 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         compute_accept(key, want);
         if (strcmp(got, want) != 0) {
             net_close(fd);
-            return -1;
+            return WS_CONNECT_EACCEPT;
         }
     }
 
