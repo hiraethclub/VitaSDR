@@ -52,6 +52,7 @@ if(VITA)
       src/vita/ui.c
       src/vita/input.c
       src/vita/config.c
+      src/vita/log.c
       src/vita/main.c)
 
   target_include_directories(${PROJECT_NAME} PRIVATE src/core)

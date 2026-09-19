@@ -7,6 +7,7 @@
  * NOTE: written to the VitaSDK SceNet API but not yet verified on hardware.
  */
 #include "net.h"
+#include "log.h"
 
 #include <psp2/net/net.h>
 #include <psp2/net/netctl.h>
@@ -32,6 +33,7 @@ int net_global_init(void)
         return 0;
 
     int ret = sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
+    vlog("sceSysmoduleLoadModule(NET) = 0x%08X", ret);
     if (ret < 0)
         return NET_ERR;
 
@@ -40,10 +42,25 @@ int net_global_init(void)
     param.size = NET_POOL_SIZE;
     param.flags = 0;
     ret = sceNetInit(&param);
+    vlog("sceNetInit = 0x%08X", ret);
     if (ret < 0 && ret != (int)SCE_NET_ERROR_EBUSY /* already initialised */)
         return NET_ERR;
 
-    sceNetCtlInit();
+    int cret = sceNetCtlInit();
+    vlog("sceNetCtlInit = 0x%08X", cret);
+
+    /* Log the link state and assigned IP so we can see the app's own view of
+     * the network (independent of the browser). */
+    int state = -1;
+    int sret = sceNetCtlInetGetState(&state);
+    vlog("sceNetCtlInetGetState = 0x%08X, state = %d (3 = connected)",
+         sret, state);
+    SceNetCtlInfo info;
+    memset(&info, 0, sizeof(info));
+    int iret = sceNetCtlInetGetInfo(SCE_NETCTL_INFO_GET_IP_ADDRESS, &info);
+    vlog("sceNetCtlInetGetInfo(IP) = 0x%08X, ip = %s", iret,
+         (iret >= 0) ? info.ip_address : "?");
+
     s_net_up = 1;
     return 0;
 }
@@ -66,11 +83,14 @@ static int resolve_host(const char *host, SceNetInAddr *out)
         return 0;
 
     int rid = sceNetResolverCreate("vitasdr", NULL, 0);
+    vlog("sceNetResolverCreate = 0x%08X", rid);
     if (rid < 0)
         return NET_ERR;
     /* Finite timeout (microseconds) and retries so a dead/unsupported resolver
      * fails cleanly instead of hanging the connect forever. */
     int ret = sceNetResolverStartNtoa(rid, host, out, 5 * 1000 * 1000, 2, 0);
+    vlog("sceNetResolverStartNtoa(%s) = 0x%08X, ip = 0x%08X", host, ret,
+         (ret >= 0) ? (unsigned)out->s_addr : 0u);
     sceNetResolverDestroy(rid);
     return (ret < 0) ? NET_ERR : 0;
 }
@@ -78,15 +98,18 @@ static int resolve_host(const char *host, SceNetInAddr *out)
 int net_tcp_connect(const char *host, int port, int timeout_ms)
 {
     s_fail_stage = NET_STAGE_NONE;
+    vlog("net_tcp_connect %s:%d", host, port);
 
     SceNetInAddr addr;
     if (resolve_host(host, &addr) != 0) {
         s_fail_stage = NET_STAGE_RESOLVE;
+        vlog("-> resolve failed");
         return NET_ERR;
     }
 
     int sock = sceNetSocket("vitasdr_tcp", SCE_NET_AF_INET, SCE_NET_SOCK_STREAM,
                             0);
+    vlog("sceNetSocket = 0x%08X", sock);
     if (sock < 0) {
         s_fail_stage = NET_STAGE_SOCKET;
         return NET_ERR;
@@ -103,9 +126,11 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
     sa.sin_addr = addr;
 
     int ret = sceNetConnect(sock, (SceNetSockaddr *)&sa, sizeof(sa));
+    vlog("sceNetConnect = 0x%08X", ret);
     if (ret < 0) {
         /* In progress: wait for writability via epoll. */
         int ep = sceNetEpollCreate("vitasdr_ep", 0);
+        vlog("sceNetEpollCreate = 0x%08X", ep);
         if (ep < 0) {
             s_fail_stage = NET_STAGE_CONNECT;
             sceNetSocketClose(sock);
@@ -120,6 +145,7 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
         SceNetEpollEvent out_ev;
         memset(&out_ev, 0, sizeof(out_ev));
         int n = sceNetEpollWait(ep, &out_ev, 1, timeout_ms * 1000);
+        vlog("sceNetEpollWait = %d (0 = timeout)", n);
         sceNetEpollDestroy(ep);
         if (n <= 0) {
             s_fail_stage = NET_STAGE_CONNECT;
@@ -131,12 +157,14 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
         int err = 0;
         unsigned int elen = sizeof(err);
         sceNetGetsockopt(sock, SCE_NET_SOL_SOCKET, SCE_NET_SO_ERROR, &err, &elen);
+        vlog("SO_ERROR = 0x%08X", (unsigned)err);
         if (err != 0) {
             s_fail_stage = NET_STAGE_CONNECT;
             sceNetSocketClose(sock);
             return NET_ERR;
         }
     }
+    vlog("net_tcp_connect OK, sock=%d", sock);
 
     /* Back to blocking, with TCP_NODELAY for low-latency control. */
     nb = 0;

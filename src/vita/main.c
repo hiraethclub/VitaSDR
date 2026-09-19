@@ -9,6 +9,7 @@
  */
 #include "app.h"
 #include "net.h"
+#include "log.h"
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -74,6 +75,7 @@ int net_thread(SceSize args, void *argp)
                     last_freq = f;
                     strncpy(last_mode, m, sizeof(last_mode));
                     last_ka = last_tune = now_ms();
+                    vlog("kiwi_connect OK, audio started");
                     ui_show_message(&g_app, "connected");
                 } else {
                     const char *why;
@@ -94,6 +96,8 @@ int net_thread(SceSize args, void *argp)
                     default:                 why = "connect failed"; break;
                     }
                     snprintf(g_app.last_err, sizeof(g_app.last_err), "%s", why);
+                    vlog("kiwi_connect rc=%d stage=%d -> %s", rc,
+                         net_last_fail_stage(), why);
                     g_app.conn_status = CONN_ERROR;
                     ui_show_message(&g_app, why);
                 }
@@ -224,7 +228,11 @@ int main(int argc, char *argv[])
     (void)argc; (void)argv;
 
     memset(&g_app, 0, sizeof(g_app));
+    log_init();
+    vlog("VitaSDR starting");
     config_load(&g_app);
+    vlog("config: host=%s port=%d freq=%.3f mode=%s",
+         g_app.host, g_app.port, g_app.freq_khz, g_app.mode);
     g_app.conn_status = CONN_IDLE;
     g_app.rssi_dbm = -140.0f;
     g_app.audio_rate = 12000;
@@ -291,6 +299,8 @@ int main(int argc, char *argv[])
     vita2d_fini();
     jitter_free(&g_app.jitter);
     net_global_fini();
+    vlog("VitaSDR exiting");
+    log_close();
 
     sceKernelExitProcess(0);
     return 0;
