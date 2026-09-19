@@ -42,7 +42,10 @@ static void net_disconnect(kiwi_client *k, int *connected, int error)
 int net_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    kiwi_client k;
+    /* Static, not on the stack: kiwi_client embeds the 64 KB websocket receive
+     * buffer, which would overflow the thread stack. Single net thread, so a
+     * single static instance is safe. */
+    static kiwi_client k;
     int connected = 0;
     double last_freq = 0;
     char   last_mode[8] = {0};
@@ -131,7 +134,9 @@ int net_thread(SceSize args, void *argp)
 int wf_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    kiwi_wf w;
+    /* Static for the same reason as net_thread's kiwi_client: kiwi_wf embeds a
+     * 64 KB websocket receive buffer. */
+    static kiwi_wf w;
     int wf_conn = 0;
     double last_freq = 0;
     uint64_t last_ka = 0, last_center = 0;
@@ -220,9 +225,9 @@ int main(int argc, char *argv[])
     input_init();
 
     SceUID net_tid = sceKernelCreateThread("vitasdr_net", net_thread,
-                                           0x10000100, 0x10000, 0, 0, NULL);
+                                           0x10000100, 0x40000, 0, 0, NULL);
     SceUID wf_tid = sceKernelCreateThread("vitasdr_wf", wf_thread,
-                                          0x10000100, 0x10000, 0, 0, NULL);
+                                          0x10000100, 0x40000, 0, 0, NULL);
     sceKernelStartThread(net_tid, 0, NULL);
     sceKernelStartThread(wf_tid, 0, NULL);
 
