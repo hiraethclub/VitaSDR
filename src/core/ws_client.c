@@ -160,14 +160,23 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         return WS_CONNECT_ESEND;
     }
 
-    /* Read the response headers up to the terminating blank line. */
+    /* Read the response headers up to the terminating blank line. Bound the
+     * total wait so a server that accepts the TCP connection but never sends
+     * the HTTP response can't hang the caller forever. */
     char resp[2048];
     size_t rlen = 0;
     int header_end = -1;
+    int idle = 0;
     while (rlen < sizeof(resp) - 1) {
         int r = net_recv(fd, resp + rlen, sizeof(resp) - 1 - rlen, timeout_ms);
-        if (r == NET_TIMEOUT)
+        if (r == NET_TIMEOUT) {
+            if (++idle >= 2) {   /* ~2x timeout_ms of silence: give up */
+                net_close(fd);
+                return WS_CONNECT_ENORESP;
+            }
             continue;
+        }
+        idle = 0;
         if (r <= 0) {
             net_close(fd);
             return WS_CONNECT_ENORESP;
