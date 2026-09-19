@@ -51,7 +51,8 @@ int net_thread(SceSize args, void *argp)
     int connected = 0;
     double last_freq = 0;
     char   last_mode[8] = {0};
-    uint64_t last_ka = 0, last_tune = 0;
+    uint64_t last_ka = 0, last_tune = 0, last_stat = 0, conn_start = 0;
+    unsigned last_msg_seq = 0;
 
     while (g_app.running) {
         if (!connected) {
@@ -74,7 +75,8 @@ int net_thread(SceSize args, void *argp)
                     audio_start(&g_app);
                     last_freq = f;
                     strncpy(last_mode, m, sizeof(last_mode));
-                    last_ka = last_tune = now_ms();
+                    last_ka = last_tune = last_stat = conn_start = now_ms();
+                    last_msg_seq = 0;
                     vlog("kiwi_connect OK, audio started");
                     ui_show_message(&g_app, "connected");
                 } else {
@@ -109,7 +111,16 @@ int net_thread(SceSize args, void *argp)
 
         /* connected */
         int r = kiwi_poll(&k, 100);
+
+        /* Surface any new server MSG control text. */
+        if (k.msg_seq != last_msg_seq) {
+            last_msg_seq = k.msg_seq;
+            vlog("MSG: %s", k.last_msg);
+        }
+
         if (r == KIWI_ERR) {
+            vlog("kiwi_poll ERR after %lu ms, samples=%lu",
+                 (unsigned long)(now_ms() - conn_start), k.samples_rx);
             net_disconnect(&k, &connected, 1);
             continue;
         }
@@ -117,6 +128,14 @@ int net_thread(SceSize args, void *argp)
             g_app.rssi_dbm = k.rssi_dbm;
             g_app.smeter_raw = k.smeter;
             g_app.samples_rx = k.samples_rx;
+        }
+
+        /* Periodic status so we can see whether audio is actually flowing. */
+        if (now_ms() - last_stat >= 2000) {
+            last_stat = now_ms();
+            vlog("status: samples=%lu rssi=%.0f jitter=%u",
+                 k.samples_rx, (double)k.rssi_dbm,
+                 (unsigned)jitter_available(&g_app.jitter));
         }
 
         if (g_app.cmd_disconnect) {

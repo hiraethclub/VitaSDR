@@ -126,6 +126,12 @@ static void handle_token(kiwi_client *k, char *tok)
 
 int kiwi_handle_msg(kiwi_client *k, const char *body, size_t len)
 {
+    /* Record the raw text for diagnostics. */
+    size_t c = len < sizeof(k->last_msg) - 1 ? len : sizeof(k->last_msg) - 1;
+    memcpy(k->last_msg, body, c);
+    k->last_msg[c] = '\0';
+    k->msg_seq++;
+
     /* Copy to a NUL-terminated scratch buffer we can tokenize. */
     char buf[1024];
     size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;

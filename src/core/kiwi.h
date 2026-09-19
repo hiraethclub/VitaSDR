@@ -56,6 +56,11 @@ typedef struct {
     float       rssi_dbm;    /* 0.1*smeter - 127 */
     unsigned    seq;         /* last audio sequence number */
     unsigned long samples_rx;/* total PCM samples decoded */
+
+    /* Diagnostics: most recent MSG control text and a counter that bumps each
+     * time a new one arrives, so the caller can log server-side chatter. */
+    char        last_msg[160];
+    unsigned    msg_seq;
 } kiwi_client;
 
 /* Default passband edges (Hz) for a mode. */
