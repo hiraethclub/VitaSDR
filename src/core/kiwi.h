@@ -96,4 +96,43 @@ int kiwi_handle_msg(kiwi_client *k, const char *body, size_t len);
  * pushed, or <0 on malformed input. */
 int kiwi_handle_snd(kiwi_client *k, const unsigned char *frame, size_t len);
 
+/* ================= Waterfall (W/F) stream ================= */
+
+#define KIWI_WF_BINS 1024
+
+/* A separate connection to the KiwiSDR's /<ts>/W/F stream, delivering the RF
+ * waterfall as one byte of power per FFT bin (uncompressed; wf_comp=0). */
+typedef struct {
+    ws_client ws;
+    int       configured;
+    double    freq_khz;   /* center frequency */
+    int       zoom;       /* 0..14; span = ~30 MHz / 2^zoom */
+    unsigned  seq;
+} kiwi_wf;
+
+/* Connect and configure the waterfall centered at freq_khz with the given
+ * zoom. Returns 0 on success, <0 on failure. */
+int kiwi_wf_connect(kiwi_wf *w, const char *host, int port,
+                    const char *password, double freq_khz, int zoom,
+                    int timeout_ms);
+
+/* Process one incoming frame. On a W/F frame, copies up to max_bins power
+ * bytes into `bins` and returns the count (>0). Returns 0 for idle/other/
+ * timeout, <0 on error. */
+int kiwi_wf_poll(kiwi_wf *w, unsigned char *bins, int max_bins, int timeout_ms);
+
+/* Recenter/zoom the waterfall. Returns 0 on success. */
+int kiwi_wf_set_center(kiwi_wf *w, double freq_khz, int zoom);
+
+/* Keepalive for the waterfall connection. */
+int kiwi_wf_keepalive(kiwi_wf *w);
+
+void kiwi_wf_disconnect(kiwi_wf *w);
+
+/* Parse a W/F frame (including the 3-byte "W/F" tag): "W/F" + x_bin(u32 LE) +
+ * flags_zoom(u32 LE) + seq(u32 LE) + bin bytes. Copies up to max_bins bytes
+ * into `bins`, returns the number copied, or <0 if malformed. Testable. */
+int kiwi_wf_parse(const unsigned char *frame, size_t len, unsigned char *bins,
+                  int max_bins);
+
 #endif /* VITASDR_KIWI_H */

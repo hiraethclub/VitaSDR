@@ -139,6 +139,17 @@ static void test_kiwi_parse(void)
     kiwi_default_passband("usb", &lc, &hc);
     CHECK(lc == 300 && hc == 2700, "usb default passband");
 
+    /* W/F frame parse: "W/F" + 12-byte header + 4 bin bytes. */
+    unsigned char wf[15 + 4];
+    memcpy(wf, "W/F", 3);
+    memset(wf + 3, 0, 12);
+    wf[15] = 10; wf[16] = 20; wf[17] = 200; wf[18] = 255;
+    unsigned char bins[KIWI_WF_BINS];
+    int nb = kiwi_wf_parse(wf, sizeof(wf), bins, KIWI_WF_BINS);
+    CHECK(nb == 4, "W/F parsed 4 bins");
+    CHECK(bins[0] == 10 && bins[3] == 255, "W/F bin values intact");
+    CHECK(kiwi_wf_parse(wf, 10, bins, KIWI_WF_BINS) < 0, "short W/F rejected");
+
     jitter_free(&jb);
 }
 

@@ -60,6 +60,7 @@ if(VITA)
       vita2d
       SceNet_stub
       SceNetCtl_stub
+      SceAppMgr_stub
       SceAppUtil_stub
       SceAudio_stub
       SceCtrl_stub
@@ -69,10 +70,9 @@ if(VITA)
       SceCommonDialog_stub
       SceSysmodule_stub
       ScePower_stub
+      ScePgf_stub
       SceIofilemgr_stub
       SceRtc_stub
-      SceKernelThreadMgr_stub
-      SceKernelModulemgr_stub
       freetype
       png
       jpeg

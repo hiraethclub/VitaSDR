@@ -242,3 +242,101 @@ void kiwi_disconnect(kiwi_client *k)
 {
     ws_close(&k->ws);
 }
+
+/* ================= Waterfall (W/F) ================= */
+
+static int wf_send_config(kiwi_wf *w)
+{
+    char cmd[96];
+    if (ws_send_text(&w->ws, "SET wf_comp=0") != 0) return -1;
+    snprintf(cmd, sizeof(cmd), "SET zoom=%d cf=%.3f", w->zoom, w->freq_khz);
+    if (ws_send_text(&w->ws, cmd) != 0) return -1;
+    if (ws_send_text(&w->ws, "SET wf_speed=1") != 0) return -1;
+    if (ws_send_text(&w->ws, "SET interp=0") != 0) return -1;
+    if (ws_send_text(&w->ws, "SET keepalive") != 0) return -1;
+    w->configured = 1;
+    return 0;
+}
+
+int kiwi_wf_connect(kiwi_wf *w, const char *host, int port,
+                    const char *password, double freq_khz, int zoom,
+                    int timeout_ms)
+{
+    memset(w, 0, sizeof(*w));
+    w->freq_khz = freq_khz;
+    w->zoom = zoom;
+
+    char path[32];
+    snprintf(path, sizeof(path), "/%ld/W/F", (long)time(NULL));
+    if (ws_connect(&w->ws, host, port, path, NULL, timeout_ms) != 0)
+        return -1;
+
+    char auth[128];
+    snprintf(auth, sizeof(auth), "SET auth t=kiwi p=%s",
+             password ? password : "");
+    if (ws_send_text(&w->ws, auth) != 0) {
+        ws_close(&w->ws);
+        return -1;
+    }
+    return 0;
+}
+
+int kiwi_wf_parse(const unsigned char *frame, size_t len, unsigned char *bins,
+                  int max_bins)
+{
+    /* "W/F"(3) + x_bin(4) + flags_zoom(4) + seq(4) = 15 bytes, then bins. */
+    if (len < 15)
+        return -1;
+    size_t nbins = len - 15;
+    if (nbins > (size_t)max_bins)
+        nbins = (size_t)max_bins;
+    memcpy(bins, frame + 15, nbins);
+    return (int)nbins;
+}
+
+int kiwi_wf_poll(kiwi_wf *w, unsigned char *bins, int max_bins, int timeout_ms)
+{
+    static unsigned char frame[WS_INBUF_SIZE];
+    int opcode = 0;
+    int r = ws_recv(&w->ws, frame, sizeof(frame), &opcode, timeout_ms);
+    if (r == WS_NONE)
+        return 0;
+    if (r < 0)
+        return -1;
+    if (r < 3)
+        return 0;
+
+    if (memcmp(frame, "W/F", 3) == 0) {
+        /* Update seq from the header if present. */
+        if (r >= 15)
+            w->seq = (unsigned)frame[11] | ((unsigned)frame[12] << 8) |
+                     ((unsigned)frame[13] << 16) | ((unsigned)frame[14] << 24);
+        return kiwi_wf_parse(frame, (size_t)r, bins, max_bins);
+    } else if (memcmp(frame, "MSG", 3) == 0) {
+        /* Once the server sends a MSG (e.g. sample_rate), it is ready for the
+         * waterfall configuration. */
+        if (!w->configured)
+            wf_send_config(w);
+        return 0;
+    }
+    return 0;
+}
+
+int kiwi_wf_set_center(kiwi_wf *w, double freq_khz, int zoom)
+{
+    w->freq_khz = freq_khz;
+    w->zoom = zoom;
+    char cmd[96];
+    snprintf(cmd, sizeof(cmd), "SET zoom=%d cf=%.3f", zoom, freq_khz);
+    return ws_send_text(&w->ws, cmd);
+}
+
+int kiwi_wf_keepalive(kiwi_wf *w)
+{
+    return ws_send_text(&w->ws, "SET keepalive");
+}
+
+void kiwi_wf_disconnect(kiwi_wf *w)
+{
+    ws_close(&w->ws);
+}
