@@ -15,11 +15,19 @@
 #define CFG_DIR  "ux0:data/vitasdr"
 #define CFG_FILE CFG_DIR "/config.ini"
 
+/* A live public KiwiSDR used as the out-of-the-box default so the app connects
+ * on first launch. Change `host`/`port` in config.ini to use your own. */
+#define DEFAULT_HOST "kiwisdr.ucsd.edu"
+#define DEFAULT_PORT 8073
+
+/* The old placeholder that shipped before a real default existed; upgraded to
+ * DEFAULT_HOST automatically when found in an existing config. */
+#define OLD_PLACEHOLDER "kiwisdr.example.com"
+
 void config_defaults(app_state *app)
 {
-    /* Placeholder host: the user must point this at their KiwiSDR. */
-    strncpy(app->host, "kiwisdr.example.com", sizeof(app->host) - 1);
-    app->port = 8073;
+    strncpy(app->host, DEFAULT_HOST, sizeof(app->host) - 1);
+    app->port = DEFAULT_PORT;
     app->password[0] = '\0';
     app->freq_khz = 7074.0;      /* 40m, 7.074 MHz */
     strncpy(app->mode, "usb", sizeof(app->mode) - 1);
@@ -46,6 +54,8 @@ int config_save(const app_state *app)
     fprintf(f,
         "# VitaSDR configuration\n"
         "# Set host/port to your KiwiSDR (or any Kiwi-compatible receiver).\n"
+        "# Find live public receivers at http://kiwisdr.com/public/\n"
+        "# Alternates you can try: canadian-prairies-shortwave.ddns.net:8073\n"
         "host=%s\n"
         "port=%d\n"
         "password=%s\n"
@@ -115,5 +125,16 @@ int config_load(app_state *app)
             app->palette = atoi(val);
     }
     fclose(f);
+
+    /* Upgrade an existing config that still holds the old placeholder (or an
+     * empty host) to the real default, and persist it, so the app connects
+     * without the user having to hand-edit anything. */
+    if (app->host[0] == '\0' || strcmp(app->host, OLD_PLACEHOLDER) == 0) {
+        strncpy(app->host, DEFAULT_HOST, sizeof(app->host) - 1);
+        app->host[sizeof(app->host) - 1] = '\0';
+        if (app->port == 0)
+            app->port = DEFAULT_PORT;
+        config_save(app);
+    }
     return 0;
 }

@@ -69,8 +69,10 @@ int net_thread(SceSize args, void *argp)
                     last_freq = f;
                     strncpy(last_mode, m, sizeof(last_mode));
                     last_ka = last_tune = now_ms();
+                    ui_show_message(&g_app, "connected");
                 } else {
                     g_app.conn_status = CONN_ERROR;
+                    ui_show_message(&g_app, "connect failed (Start to retry)");
                 }
             } else {
                 sceKernelDelayThread(50 * 1000);
@@ -224,11 +226,14 @@ int main(int argc, char *argv[])
     sceKernelStartThread(net_tid, 0, NULL);
     sceKernelStartThread(wf_tid, 0, NULL);
 
-    /* Auto-connect on launch if a host looks configured. */
-    if (g_app.host[0] && strcmp(g_app.host, "kiwisdr.example.com") != 0)
+    /* Auto-connect on launch if a host is configured (config_load guarantees a
+     * real default, upgrading the old placeholder automatically). */
+    if (g_app.host[0]) {
         g_app.cmd_connect = 1;
-    else
+        ui_show_message(&g_app, g_app.host);
+    } else {
         ui_show_message(&g_app, "Set host in ux0:data/vitasdr/config.ini");
+    }
 
     while (g_app.running) {
         input_poll(&g_app);
