@@ -292,8 +292,14 @@ int ws_send_binary(ws_client *ws, const void *data, size_t len)
 }
 
 /* Ensure at least `need` bytes are buffered in ws->in, reading from the socket
- * as required. Returns 0 on success, WS_ERROR on close/error, WS_NONE on
- * timeout with insufficient data. */
+ * as required.
+ *
+ * Returns EB_OK (>0) when the bytes are available, WS_NONE (0) on timeout with
+ * insufficient data, or WS_ERROR (<0) on close/error. IMPORTANT: success must
+ * NOT be 0, because WS_NONE is 0 — if it were, ws_recv would mistake a timeout
+ * for success and parse a frame header from a partial/empty buffer, permanently
+ * misaligning the stream. */
+#define EB_OK 1
 static int ensure_buffered(ws_client *ws, size_t need, int timeout_ms)
 {
     while (ws->in_len < need) {
@@ -312,7 +318,7 @@ static int ensure_buffered(ws_client *ws, size_t need, int timeout_ms)
         for (int i = 0; i < r && ws->dbg_first_len < sizeof(ws->dbg_first); i++)
             ws->dbg_first[ws->dbg_first_len++] = dst[i];
     }
-    return 0;
+    return EB_OK;
 }
 
 /* Drop `n` consumed bytes from the front of the buffer. */
@@ -338,8 +344,8 @@ int ws_recv(ws_client *ws, void *out, size_t out_cap, int *opcode,
     for (;;) {
         /* Minimum header is 2 bytes. */
         int rc = ensure_buffered(ws, 2, timeout_ms);
-        if (rc != 0)
-            return rc; /* WS_NONE or WS_ERROR */
+        if (rc <= 0)
+            return rc; /* WS_NONE (0) or WS_ERROR (<0) */
 
         uint8_t b0 = ws->in[0];
         uint8_t b1 = ws->in[1];
@@ -351,12 +357,12 @@ int ws_recv(ws_client *ws, void *out, size_t out_cap, int *opcode,
 
         if (plen == 126) {
             rc = ensure_buffered(ws, 4, timeout_ms);
-            if (rc != 0) return rc;
+            if (rc <= 0) return rc;
             plen = ((uint64_t)ws->in[2] << 8) | ws->in[3];
             hdr = 4;
         } else if (plen == 127) {
             rc = ensure_buffered(ws, 10, timeout_ms);
-            if (rc != 0) return rc;
+            if (rc <= 0) return rc;
             plen = 0;
             for (int i = 0; i < 8; i++)
                 plen = (plen << 8) | ws->in[2 + i];
@@ -371,7 +377,7 @@ int ws_recv(ws_client *ws, void *out, size_t out_cap, int *opcode,
             return WS_ERROR; /* frame too large for buffer */
 
         rc = ensure_buffered(ws, hdr + (size_t)plen, timeout_ms);
-        if (rc != 0)
+        if (rc <= 0)
             return rc;
 
         uint8_t *payload = ws->in + hdr;

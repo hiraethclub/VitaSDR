@@ -305,6 +305,44 @@ static void test_websocket_loopback(void)
     close(lfd);
 }
 
+/* Regression test for the ensure_buffered timeout bug: a ws_recv that times out
+ * on an empty socket must return WS_NONE cleanly and must NOT misalign the
+ * stream, so a frame that arrives afterwards is read intact. */
+static void test_websocket_recv_timeout(void)
+{
+    printf("[websocket recv timeout]\n");
+    int sv[2];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair");
+
+    ws_client ws;
+    memset(&ws, 0, sizeof(ws));
+    ws.fd = sv[0];
+    ws.dbg_net_result = 99;
+
+    /* Nothing sent yet: must time out to WS_NONE, not parse garbage/spin. */
+    uint8_t out[64];
+    int op = 0;
+    int r = ws_recv(&ws, out, sizeof(out), &op, 100);
+    CHECK(r == WS_NONE, "empty socket -> WS_NONE (no misalign)");
+
+    /* Now deliver a complete unmasked binary frame: "MSG ab". */
+    const char *payload = "MSG ab";
+    uint8_t frame[8];
+    frame[0] = 0x82;                 /* FIN + binary */
+    frame[1] = (uint8_t)strlen(payload);
+    memcpy(frame + 2, payload, strlen(payload));
+    ssize_t wn = write(sv[1], frame, 2 + strlen(payload));
+    CHECK(wn == (ssize_t)(2 + strlen(payload)), "server wrote frame");
+
+    r = ws_recv(&ws, out, sizeof(out), &op, 500);
+    CHECK(r == (int)strlen(payload) && op == WS_OP_BINARY,
+          "frame after timeout read intact");
+    CHECK(memcmp(out, payload, strlen(payload)) == 0, "payload correct");
+
+    close(sv[0]);
+    close(sv[1]);
+}
+
 int main(void)
 {
     printf("VitaSDR core tests\n==================\n");
@@ -312,6 +350,7 @@ int main(void)
     test_jitter();
     test_kiwi_parse();
     test_websocket_loopback();
+    test_websocket_recv_timeout();
     printf("==================\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
