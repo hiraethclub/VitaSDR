@@ -34,6 +34,13 @@ typedef struct {
     int      fd;                 /* transport handle, <0 when not connected */
     uint8_t  in[WS_INBUF_SIZE];  /* buffered bytes from the socket */
     size_t   in_len;             /* valid bytes in `in` */
+
+    /* Diagnostics (read by the caller for logging). */
+    unsigned dbg_rx_bytes;       /* total bytes read from the socket */
+    int      dbg_close_frame;    /* set if a WebSocket close frame was received */
+    int      dbg_net_result;     /* last net_recv non-data result; 99 = none */
+    uint8_t  dbg_first[32];      /* first bytes seen on the stream */
+    unsigned dbg_first_len;
 } ws_client;
 
 /* ws_connect failure codes (all negative). */

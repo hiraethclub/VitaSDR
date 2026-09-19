@@ -119,8 +119,21 @@ int net_thread(SceSize args, void *argp)
         }
 
         if (r == KIWI_ERR) {
-            vlog("kiwi_poll ERR after %lu ms, samples=%lu",
-                 (unsigned long)(now_ms() - conn_start), k.samples_rx);
+            vlog("kiwi_poll ERR after %lu ms, samples=%lu, rx_bytes=%u close=%d net=%d",
+                 (unsigned long)(now_ms() - conn_start), k.samples_rx,
+                 k.ws.dbg_rx_bytes, k.ws.dbg_close_frame, k.ws.dbg_net_result);
+            /* Hex + ASCII of the first bytes the server sent, if any. */
+            char hex[3 * 32 + 1], asc[32 + 1];
+            unsigned nf = k.ws.dbg_first_len;
+            for (unsigned i = 0; i < nf; i++) {
+                snprintf(hex + i * 3, 4, "%02x ", k.ws.dbg_first[i]);
+                unsigned char c = k.ws.dbg_first[i];
+                asc[i] = (c >= 32 && c < 127) ? (char)c : '.';
+            }
+            asc[nf] = '\0';
+            if (nf == 0)
+                hex[0] = '\0';
+            vlog("first %u bytes: %s | %s", nf, hex, asc);
             net_disconnect(&k, &connected, 1);
             continue;
         }
@@ -191,8 +204,10 @@ int wf_thread(SceSize args, void *argp)
             double f = g_app.freq_khz;
             int zoom = g_app.zoom;
             sceKernelUnlockMutex(g_app.lock, 1);
-            if (kiwi_wf_connect(&w, g_app.host, g_app.port, g_app.password,
-                                f, zoom, 6000) == 0) {
+            int wrc = kiwi_wf_connect(&w, g_app.host, g_app.port,
+                                      g_app.password, f, zoom, 6000);
+            vlog("wf_connect rc=%d", wrc);
+            if (wrc == 0) {
                 wf_conn = 1;
                 last_freq = f;
                 last_ka = last_center = now_ms();

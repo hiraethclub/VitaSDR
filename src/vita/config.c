@@ -20,7 +20,7 @@
  * NOTE: this is a convenience testing default; for a public release we should
  * either make it clearly configurable or point at a receiver intended for
  * heavy public use rather than a personal one. */
-#define DEFAULT_HOST "shack2.ddns.net"
+#define DEFAULT_HOST "gw0kax.proxy.kiwisdr.com"
 #define DEFAULT_PORT 8073
 
 /* Hosts we have shipped as defaults in prior builds. If an existing config
@@ -29,7 +29,8 @@
  * host the user typed themselves is never touched. */
 static const char *SHIPPED_DEFAULTS[] = {
     "kiwisdr.example.com",   /* original placeholder */
-    "kiwisdr.ucsd.edu"       /* previous default */
+    "kiwisdr.ucsd.edu",      /* earlier default */
+    "shack2.ddns.net"        /* previous default */
 };
 
 void config_defaults(app_state *app)

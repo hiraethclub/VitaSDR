@@ -218,6 +218,12 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         ws->in_len = extra;
     }
 
+    ws->dbg_rx_bytes = (unsigned)extra;
+    ws->dbg_close_frame = 0;
+    ws->dbg_net_result = 99;
+    ws->dbg_first_len = extra < sizeof(ws->dbg_first) ? (unsigned)extra
+                                                      : sizeof(ws->dbg_first);
+    memcpy(ws->dbg_first, ws->in, ws->dbg_first_len);
     ws->fd = fd;
     return 0;
 }
@@ -293,13 +299,18 @@ static int ensure_buffered(ws_client *ws, size_t need, int timeout_ms)
     while (ws->in_len < need) {
         if (ws->in_len >= WS_INBUF_SIZE)
             return WS_ERROR; /* frame larger than our buffer */
-        int r = net_recv(ws->fd, ws->in + ws->in_len,
-                         WS_INBUF_SIZE - ws->in_len, timeout_ms);
+        uint8_t *dst = ws->in + ws->in_len;
+        int r = net_recv(ws->fd, dst, WS_INBUF_SIZE - ws->in_len, timeout_ms);
         if (r == NET_TIMEOUT)
             return WS_NONE;
-        if (r <= 0)
+        if (r <= 0) {
+            ws->dbg_net_result = r;
             return WS_ERROR;
+        }
         ws->in_len += (size_t)r;
+        ws->dbg_rx_bytes += (unsigned)r;
+        for (int i = 0; i < r && ws->dbg_first_len < sizeof(ws->dbg_first); i++)
+            ws->dbg_first[ws->dbg_first_len++] = dst[i];
     }
     return 0;
 }
@@ -371,6 +382,7 @@ int ws_recv(ws_client *ws, void *out, size_t out_cap, int *opcode,
         }
 
         if (op == 0x8) {                 /* close */
+            ws->dbg_close_frame = 1;
             consume(ws, hdr + (size_t)plen);
             return WS_ERROR;
         } else if (op == 0x9) {          /* ping -> pong */
