@@ -64,16 +64,17 @@ connect/disconnect manually.
 
 ## Controls
 
-| Input            | Action                                     |
-|------------------|--------------------------------------------|
-| Left stick L/R   | Tune (gentle = fine, full deflection = fast) |
-| Right stick L/R  | Volume                                     |
-| Right stick U/D  | Squelch                                    |
-| D-pad L/R        | Cycle tuning step (1 Hz … 100 kHz)         |
-| L + R together   | Cycle mode (USB/LSB/AM/CW/NBFM)            |
-| Start            | Connect / disconnect                       |
-| Select           | Toggle spectrum                            |
-| Circle           | Exit                                       |
+| Input            | Action                                              |
+|------------------|-----------------------------------------------------|
+| D-pad L/R        | Tune down/up by one step (hold to repeat)           |
+| D-pad U/D        | Change tuning step (1 Hz … 100 kHz)                 |
+| Left stick L/R   | Sweep tuning (rate scales with how far you push)    |
+| Right stick L/R  | Volume                                              |
+| Right stick U/D  | Squelch                                             |
+| L + R together   | Cycle mode (USB/LSB/AM/CW/NBFM)                     |
+| Start            | Connect / disconnect                                |
+| Select           | Toggle spectrum                                     |
+| Circle           | Exit                                                |
 
 ## Testing status
 

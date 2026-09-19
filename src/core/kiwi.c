@@ -255,11 +255,15 @@ void kiwi_disconnect(kiwi_client *k)
 static int wf_send_config(kiwi_wf *w)
 {
     char cmd[96];
+    /* Order/commands mirror the reference client's W/F setup. maxdb/mindb set
+     * the dB window mapped onto the 0..255 bin bytes -- without them the data
+     * is poorly scaled (looks blank). interp=13 matches the reference. */
     if (ws_send_text(&w->ws, "SET wf_comp=0") != 0) return -1;
+    if (ws_send_text(&w->ws, "SET maxdb=-10 mindb=-110") != 0) return -1;
     snprintf(cmd, sizeof(cmd), "SET zoom=%d cf=%.3f", w->zoom, w->freq_khz);
     if (ws_send_text(&w->ws, cmd) != 0) return -1;
     if (ws_send_text(&w->ws, "SET wf_speed=1") != 0) return -1;
-    if (ws_send_text(&w->ws, "SET interp=0") != 0) return -1;
+    if (ws_send_text(&w->ws, "SET interp=13") != 0) return -1;
     if (ws_send_text(&w->ws, "SET keepalive") != 0) return -1;
     w->configured = 1;
     return 0;
@@ -326,9 +330,17 @@ int kiwi_wf_poll(kiwi_wf *w, unsigned char *bins, int max_bins, int timeout_ms)
                      ((unsigned)frame[13] << 16) | ((unsigned)frame[14] << 24);
         return kiwi_wf_parse(frame, (size_t)r, bins, max_bins);
     } else if (memcmp(frame, "MSG", 3) == 0) {
-        /* Once the server sends a MSG (e.g. sample_rate), it is ready for the
-         * waterfall configuration. */
-        if (!w->configured)
+        /* The server sends a "wf_setup" MSG when it is ready for the waterfall
+         * configuration -- that is the authoritative trigger, so (re)send the
+         * config then even though we also sent it right after auth. Any other
+         * MSG before we are configured triggers it too, as a fallback. */
+        const char *body = (const char *)frame + 3;
+        size_t blen = (size_t)r - 3;
+        int has_wf_setup = 0;
+        for (size_t i = 0; i + 8 <= blen; i++) {
+            if (memcmp(body + i, "wf_setup", 8) == 0) { has_wf_setup = 1; break; }
+        }
+        if (has_wf_setup || !w->configured)
             wf_send_config(w);
         return 0;
     }

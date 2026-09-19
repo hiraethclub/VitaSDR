@@ -125,16 +125,21 @@ Planned for a later milestone.
 
 ## Default hardware controls (implemented subset)
 
-| Input             | Action                                     |
-|-------------------|--------------------------------------------|
-| Left stick L/R    | Tune (accelerated: gentle=fine, full=fast) |
-| Right stick L/R   | Volume                                     |
-| Right stick U/D   | Squelch                                    |
-| D-pad L/R         | Cycle tuning step (1Hz..100kHz)            |
-| L + R together    | Cycle demodulation mode                    |
-| Start             | Connect / disconnect                       |
-| Select            | Toggle spectrum overlay                    |
-| Circle            | Exit                                       |
+| Input             | Action                                              |
+|-------------------|-----------------------------------------------------|
+| D-pad L/R         | Tune down/up by one step (auto-repeats when held)   |
+| D-pad U/D         | Change tuning step (1Hz..100kHz)                    |
+| Left stick L/R    | Sweep tuning (rate scales with deflection)          |
+| Right stick L/R   | Volume                                              |
+| Right stick U/D   | Squelch                                             |
+| L + R together    | Cycle demodulation mode                             |
+| Start             | Connect / disconnect                                |
+| Select            | Toggle spectrum overlay                             |
+| Circle            | Exit                                                |
+
+All tuning snaps to the current step grid so it lands on clean frequencies.
+Volume is a software gain (up to ~8x) with clipping, since receiver audio sits
+well below full scale.
 
 Touchscreen, bookmarks, band-plan jumps, per-button remapping, and the main
 menu are specified for later milestones and not yet built.
@@ -161,19 +166,28 @@ menu are specified for later milestones and not yet built.
 
 ## Current state
 
-Milestone 1 reached: a buildable VPK that connects to a KiwiSDR, decodes and
-plays IMA-ADPCM audio, tunes, and renders a live RF waterfall + spectrum with
-an S-meter.
+Milestone 1 reached and shaken out on real hardware (PCH-1000): the app
+connects to a KiwiSDR, decodes and plays IMA-ADPCM audio, tunes, shows a live
+S-meter, and renders a waterfall.
 
-**Verified on the host** (native `vitasdr_test`, 40 assertions): ADPCM decode,
-jitter buffer, KiwiSDR SND/MSG/WF parsing, and a full websocket handshake +
-frame round-trip against a loopback server.
+**Verified on the host** (native `vitasdr_test`, 45 assertions): ADPCM decode,
+jitter buffer, KiwiSDR SND/MSG/WF parsing, and the websocket handshake + frame
+round-trip, including the recv-timeout path that caused a stream-misalignment
+bug on hardware.
 
-**Not yet verified on hardware.** The `vita/` layer (SceNet, sceAudioOut,
-vita2d rendering, threading) compiles cleanly with `-Wall -Wextra` but has not
-been run on a real Vita or emulator. The KiwiSDR live wire behaviour has not
-been exercised against a real receiver from this environment (no plain-ws
-egress). See README "Testing status" for what to check first on device.
+**Fixed during on-device testing:**
+- worker-thread stack overflow (64 KB ws buffer on a 64 KB stack) -> static.
+- `ws_recv` treated a recv timeout (WS_NONE==0) as success and misaligned the
+  frame stream -> distinct EB_OK return.
+- audio silent: 12 kHz mono `sceAudioOut` port rejected -> open 48 kHz stereo
+  and resample; volume made a real gain (was attenuation-only, too quiet).
+- W/F reconnecting / blank: send setup after auth and on `wf_setup`, add
+  `maxdb`/`mindb`, adaptive-contrast rendering.
+- analog tuning was uncontrollable -> D-pad single-step + gentle stick sweep;
+  widened stick deadzones (drift was retuning / draining volume).
 
-Next steps: on-device shakedown; then bookmarks, touchscreen, palette/zoom
-controls, and the OpenWebRX protocol.
+On-device diagnostics are written to `ux0:data/vitasdr/vitasdr.log` (verbose;
+trim once stable).
+
+Next steps: confirm waterfall renders on device; then trim logging, add
+bookmarks, touchscreen, palette/zoom controls, and the OpenWebRX protocol.
