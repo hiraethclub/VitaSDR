@@ -16,13 +16,21 @@
 #define CFG_FILE CFG_DIR "/config.ini"
 
 /* A live public KiwiSDR used as the out-of-the-box default so the app connects
- * on first launch. Change `host`/`port` in config.ini to use your own. */
-#define DEFAULT_HOST "kiwisdr.ucsd.edu"
+ * on first launch. Change `host`/`port` in config.ini to use your own.
+ * NOTE: this is a convenience testing default; for a public release we should
+ * either make it clearly configurable or point at a receiver intended for
+ * heavy public use rather than a personal one. */
+#define DEFAULT_HOST "shack2.ddns.net"
 #define DEFAULT_PORT 8073
 
-/* The old placeholder that shipped before a real default existed; upgraded to
- * DEFAULT_HOST automatically when found in an existing config. */
-#define OLD_PLACEHOLDER "kiwisdr.example.com"
+/* Hosts we have shipped as defaults in prior builds. If an existing config
+ * still holds one of these (or an empty host), it is upgraded to the current
+ * DEFAULT_HOST automatically so updates take effect without hand-editing. A
+ * host the user typed themselves is never touched. */
+static const char *SHIPPED_DEFAULTS[] = {
+    "kiwisdr.example.com",   /* original placeholder */
+    "kiwisdr.ucsd.edu"       /* previous default */
+};
 
 void config_defaults(app_state *app)
 {
@@ -126,10 +134,18 @@ int config_load(app_state *app)
     }
     fclose(f);
 
-    /* Upgrade an existing config that still holds the old placeholder (or an
-     * empty host) to the real default, and persist it, so the app connects
-     * without the user having to hand-edit anything. */
-    if (app->host[0] == '\0' || strcmp(app->host, OLD_PLACEHOLDER) == 0) {
+    /* Upgrade an existing config that still holds a previously-shipped default
+     * (or an empty host) to the current default, and persist it, so the app
+     * connects without the user having to hand-edit anything. A host the user
+     * chose themselves is left alone. */
+    int is_shipped = (app->host[0] == '\0');
+    for (size_t i = 0; !is_shipped &&
+                       i < sizeof(SHIPPED_DEFAULTS) / sizeof(SHIPPED_DEFAULTS[0]);
+         i++) {
+        if (strcmp(app->host, SHIPPED_DEFAULTS[i]) == 0)
+            is_shipped = 1;
+    }
+    if (is_shipped) {
         strncpy(app->host, DEFAULT_HOST, sizeof(app->host) - 1);
         app->host[sizeof(app->host) - 1] = '\0';
         if (app->port == 0)

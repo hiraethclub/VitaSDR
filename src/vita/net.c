@@ -62,7 +62,9 @@ static int resolve_host(const char *host, SceNetInAddr *out)
     int rid = sceNetResolverCreate("vitasdr", NULL, 0);
     if (rid < 0)
         return NET_ERR;
-    int ret = sceNetResolverStartNtoa(rid, host, out, 0, 0, 0);
+    /* Finite timeout (microseconds) and retries so a dead/unsupported resolver
+     * fails cleanly instead of hanging the connect forever. */
+    int ret = sceNetResolverStartNtoa(rid, host, out, 5 * 1000 * 1000, 2, 0);
     sceNetResolverDestroy(rid);
     return (ret < 0) ? NET_ERR : 0;
 }
