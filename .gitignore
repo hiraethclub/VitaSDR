@@ -1,0 +1,13 @@
+# Build directories
+/build/
+/build-native/
+/build-vita/
+# Vita build artifacts
+*.velf
+*.self
+*.vpk
+*.sfo
+# Object files / editors
+*.o
+*.a
+.vscode/
