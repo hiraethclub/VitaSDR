@@ -5,8 +5,9 @@ A PS Vita homebrew client for web SDR receivers. Point it at a
 live RF waterfall — a shortwave/HF radio in your hands, using someone else's
 antenna over the internet.
 
-> Status: early. The radio core is tested on a host; the Vita front-end builds
-> cleanly but has **not** yet been run on real hardware. See
+> Status: **v0.1.0 — working on real hardware.** Verified on a PS Vita PCH-1000:
+> connects to a KiwiSDR, plays clean audio, tunes, and renders the waterfall.
+> The radio core also has host-side unit tests. See
 > [Testing status](#testing-status).
 
 ## What works today
@@ -78,24 +79,30 @@ connect/disconnect manually.
 
 ## Testing status
 
-Verified on the host by `vitasdr_test` (40 assertions):
+Verified on the host by `vitasdr_test` (55 assertions):
 
 - IMA-ADPCM decode against a hand-traced vector
 - jitter buffer FIFO order and drop-oldest overflow
-- KiwiSDR `SND`, `MSG`, and `W/F` frame parsing
+- KiwiSDR `SND`, `MSG`, and `W/F` frame parsing, and band-plan lookup
+- windowed-sinc resampler: image suppression, unity DC and mid-band gain
 - full RFC 6455 handshake (with `Sec-WebSocket-Accept` verification) and
   binary frame round-trip against a loopback server, including auto ping/pong
+  and the recv-timeout path that once misaligned the frame stream
 
-**Not yet verified**, and the first things to check on a real Vita:
+Verified on real hardware (PS Vita PCH-1000):
 
-1. Does it connect? (SceNet init, DNS resolve, ws handshake over real network)
-2. Is there audio, at the right pitch? (12 kHz `sceAudioOut`, ADPCM continuity)
-3. Does the waterfall render and scroll? (vita2d texture, `wf_comp=0` bins)
-4. Do tuning and mode changes reach the server without stutter?
+- connects over the real network (SceNet init, DNS resolve, ws handshake)
+- audio plays at the correct pitch; a windowed-sinc upsampler and double-
+  buffered `sceAudioOut` output removed the earlier metallic/buzzing artifact
+- waterfall renders and scrolls (viridis palette, adaptive contrast)
+- tuning, mode changes, S-meter, spectrum, passband and band labels all live
 
-If audio is silent but the S-meter moves, suspect the audio thread / port
-open. If the waterfall is noise, the receiver may be ignoring `wf_comp=0`
-(compressed bins) — that path is not yet handled.
+Known rough edges (not blocking, next on the list):
+
+- volume/clipping behaviour at high gain could be gentler
+- verbose diagnostics and audio captures still write to `ux0:data/vitasdr/`
+- `wf_comp=0` (uncompressed bins) only; the compressed-waterfall path and
+  OpenWebRX are not yet implemented
 
 ## License
 
