@@ -12,6 +12,7 @@
  */
 #include "app.h"
 #include "log.h"
+#include "b64.h"
 
 #include <psp2/audioout.h>
 #include <psp2/kernel/threadmgr.h>
@@ -56,11 +57,15 @@ static int audio_thread(SceSize args, void *argp)
     int prev = 0;         /* last source sample of previous block (continuity) */
 
     /* Debug capture: dump the raw decoded 12 kHz mono PCM (straight from the
-     * ADPCM decoder, before resampling/gain) to a file for the first few
-     * seconds, so the exact decoded audio can be analysed off-device. */
-    FILE *cap = fopen("ux0:data/vitasdr/audio.raw", "wb");
+     * ADPCM decoder, before resampling/gain) for the first few seconds, so the
+     * exact decoded audio can be analysed off-device. Written base64-encoded
+     * (as text) so it can be attached in clients that reject binary files;
+     * decode with `base64 -d audio_pcm.log > audio.raw`. */
+    b64_enc capb;
+    int cap_ok = (b64_open(&capb, "ux0:data/vitasdr/audio_pcm.log") == 0);
+    b64_enc *cap = cap_ok ? &capb : NULL;
     long cap_left = (long)s_src_rate * 6; /* ~6 seconds */
-    vlog("audio capture %s", cap ? "open (ux0:data/vitasdr/audio.raw)" : "FAILED");
+    vlog("audio capture %s", cap ? "open (ux0:data/vitasdr/audio_pcm.log)" : "FAILED");
 
     while (s_run) {
         /* Adjust consumption toward the target fill level. */
@@ -81,10 +86,10 @@ static int audio_thread(SceSize args, void *argp)
         /* Capture the raw decoded PCM (real samples only) to disk. */
         if (cap && cap_left > 0 && got > 0) {
             size_t w = (size_t)cap_left < got ? (size_t)cap_left : got;
-            fwrite(src, sizeof(int16_t), w, cap);
+            b64_write(cap, src, (unsigned)(w * sizeof(int16_t)));
             cap_left -= (long)w;
             if (cap_left <= 0) {
-                fclose(cap);
+                b64_close(cap);
                 cap = NULL;
                 vlog("audio capture complete");
             }
@@ -133,7 +138,7 @@ static int audio_thread(SceSize args, void *argp)
                  (unsigned)jitter_available(&s_app->jitter));
     }
     if (cap)
-        fclose(cap);
+        b64_close(cap);
     return 0;
 }
 

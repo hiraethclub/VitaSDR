@@ -10,6 +10,7 @@
 #include "app.h"
 #include "net.h"
 #include "log.h"
+#include "b64.h"
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -29,23 +30,26 @@ static uint64_t now_ms(void)
 }
 
 /* Debug: capture the raw ADPCM payload of the first ~6s of SND frames to
- * ux0:data/vitasdr/adpcm.raw, so the exact received compressed audio can be
- * decoded off-device with a reference decoder to validate our decode. */
-static FILE  *s_adpcm_cap = NULL;
-static long   s_adpcm_left = 0;
+ * ux0:data/vitasdr/adpcm.log, so the exact received compressed audio can be
+ * decoded off-device with a reference decoder to validate our decode. Written
+ * base64-encoded (as text) so it can be attached in clients that reject binary
+ * files; decode with `base64 -d adpcm.log > adpcm.raw`. */
+static b64_enc s_adpcm_cap;
+static int     s_adpcm_open = 0;
+static long    s_adpcm_left = 0;
 static void adpcm_capture(unsigned char flags, const unsigned char *audio,
                           int audio_len)
 {
-    if (!s_adpcm_cap || s_adpcm_left <= 0 || audio_len <= 0)
+    if (!s_adpcm_open || s_adpcm_left <= 0 || audio_len <= 0)
         return;
     if (!(flags & 0x10))   /* only capture COMPRESSED (ADPCM) payloads */
         return;
     int w = audio_len < s_adpcm_left ? audio_len : (int)s_adpcm_left;
-    fwrite(audio, 1, (size_t)w, s_adpcm_cap);
+    b64_write(&s_adpcm_cap, audio, (unsigned)w);
     s_adpcm_left -= w;
     if (s_adpcm_left <= 0) {
-        fclose(s_adpcm_cap);
-        s_adpcm_cap = NULL;
+        b64_close(&s_adpcm_cap);
+        s_adpcm_open = 0;
         vlog("adpcm capture complete");
     }
 }
@@ -308,10 +312,10 @@ int main(int argc, char *argv[])
     g_app.lock = sceKernelCreateMutex("vitasdr_lock", 0, 0, NULL);
 
     /* Install the ADPCM debug capture (first ~6s of compressed payload). */
-    s_adpcm_cap = fopen("ux0:data/vitasdr/adpcm.raw", "wb");
+    s_adpcm_open = (b64_open(&s_adpcm_cap, "ux0:data/vitasdr/adpcm.log") == 0);
     s_adpcm_left = 12000 / 2 * 6;   /* ~6s of ADPCM (2 samples/byte @ 12kHz) */
     kiwi_snd_tap = adpcm_capture;
-    vlog("adpcm capture %s", s_adpcm_cap ? "open" : "FAILED");
+    vlog("adpcm capture %s", s_adpcm_open ? "open" : "FAILED");
 
     int net_ok = (net_global_init() == 0);
     if (!net_ok) {
