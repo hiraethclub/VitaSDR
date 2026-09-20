@@ -6,11 +6,11 @@
 
 #define HALF (RESAMP_TAPS / 2)
 
-/* Cutoff of the anti-imaging low-pass, as a fraction of the SOURCE sample rate.
- * The source Nyquist is 0.5; 0.467 (~5.6 kHz at 12 kHz) passes essentially all
- * of the receiver audio while placing the stopband over the image region that
- * begins just above 6 kHz. */
-#define FC_SRC 0.46667
+/* Widest useful cutoff, as a fraction of the SOURCE sample rate. The source
+ * Nyquist is 0.5; 0.467 (~5.6 kHz at 12 kHz) passes essentially all of the
+ * receiver audio while placing the stopband over the image region that begins
+ * just above 6 kHz. A caller may request a lower cutoff to also band-limit. */
+#define FC_MAX 0.46667
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -42,11 +42,20 @@ static double bessel_i0(double x)
     return sum;
 }
 
-void resamp_init(resamp *r, double in_rate, double out_rate)
+void resamp_init(resamp *r, double in_rate, double out_rate, double cutoff_hz)
 {
     const double beta = 8.0;           /* Kaiser beta: ~ -60 dB sidelobes */
     double i0b = bessel_i0(beta);
     int p, k;
+
+    /* Cutoff as a fraction of the source rate, clamped to the anti-imaging
+     * maximum (a wider request cannot help and would let images through). */
+    double fc = FC_MAX;
+    if (cutoff_hz > 0.0 && in_rate > 0.0) {
+        fc = cutoff_hz / in_rate;
+        if (fc > FC_MAX) fc = FC_MAX;
+        if (fc < 0.02)   fc = 0.02;
+    }
 
     for (p = 0; p < RESAMP_PHASES; p++) {
         double frac = (double)p / (double)RESAMP_PHASES;
@@ -55,7 +64,7 @@ void resamp_init(resamp *r, double in_rate, double out_rate)
             /* Tap offset relative to the interpolation point, in source
              * samples: taps span [-(HALF-1) .. HALF]. */
             double u = (double)(k - (HALF - 1)) - frac;
-            double s = 2.0 * FC_SRC * sinc_pi(2.0 * FC_SRC * u);
+            double s = 2.0 * fc * sinc_pi(2.0 * fc * u);
             /* Kaiser window over the tap span (|u| <= HALF). */
             double ratio = u / (double)HALF;
             double arg = 1.0 - ratio * ratio;

@@ -34,8 +34,11 @@ typedef struct {
 } resamp;
 
 /* Build the kernel table and reset state. in_rate/out_rate set the nominal
- * step (source samples advanced per output). */
-void resamp_init(resamp *r, double in_rate, double out_rate);
+ * step (source samples advanced per output). cutoff_hz sets the kernel's
+ * low-pass corner: pass <= 0 for the widest useful cutoff (just below the
+ * source Nyquist, i.e. pure anti-imaging). A lower value additionally band-
+ * limits the audio, which tames the harsh high-frequency hiss on noisy AM. */
+void resamp_init(resamp *r, double in_rate, double out_rate, double cutoff_hz);
 
 /* Clear buffered history/position (e.g. on a new stream). Keeps the table. */
 void resamp_reset(resamp *r);

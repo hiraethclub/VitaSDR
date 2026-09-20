@@ -25,6 +25,9 @@
 #define OUT_GRAIN  512    /* samples per channel per output (multiple of 64) */
 #define SOFT_KNEE   28000  /* safety soft-limit above this magnitude */
 #define AUDIO_GAIN  3      /* fixed gain at volume=100 */
+#define AUDIO_LP_HZ 3800.0 /* audio low-pass corner: tames harsh HF hiss that
+                            * desktop clients filter but we were playing raw */
+#define DC_R        0.995f /* DC blocker pole (~10 Hz corner at 12 kHz) */
 
 static app_state *s_app = NULL;
 static int        s_port = -1;
@@ -47,7 +50,12 @@ static int audio_thread(SceSize args, void *argp)
      * correction nudges this by <1% (inaudible) to keep the jitter buffer near
      * the target fill, absorbing the receiver's true ~11998.9 Hz vs our 12000. */
     const double base_step = (double)s_src_rate / (double)OUT_RATE;
-    resamp_init(&s_rs, (double)s_src_rate, (double)OUT_RATE);
+    resamp_init(&s_rs, (double)s_src_rate, (double)OUT_RATE, AUDIO_LP_HZ);
+
+    /* DC blocker state: AM demodulation and IMA-ADPCM both leave a slowly
+     * wandering DC offset that eats headroom and biases the limiter. A single-
+     * pole high-pass removes it without touching the audio band. */
+    float dc_x1 = 0.0f, dc_y1 = 0.0f;
 
     /* Drift correction target: hold the jitter buffer near ~0.3s so latency is
      * bounded and the clock mismatch can't slowly fill or drain it. */
@@ -97,7 +105,19 @@ static int audio_thread(SceSize args, void *argp)
                 produced = OUT_GRAIN;
                 break;
             }
-            /* Capture the raw decoded PCM (before resampling) to disk. */
+            /* Remove DC / subsonic drift in place. */
+            for (size_t j = 0; j < got; j++) {
+                float x = (float)raw[j];
+                float y = x - dc_x1 + DC_R * dc_y1;
+                dc_x1 = x;
+                dc_y1 = y;
+                int v = (int)(y + (y >= 0.0f ? 0.5f : -0.5f));
+                if (v > 32767) v = 32767;
+                else if (v < -32768) v = -32768;
+                raw[j] = (int16_t)v;
+            }
+
+            /* Capture the decoded PCM (after DC-blocking) to disk. */
             if (cap && cap_left > 0) {
                 size_t w = (size_t)cap_left < got ? (size_t)cap_left : got;
                 b64_write(cap, raw, (unsigned)(w * sizeof(int16_t)));

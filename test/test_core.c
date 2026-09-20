@@ -392,7 +392,7 @@ static void test_resamp(void)
 {
     printf("[resamp]\n");
     resamp r;
-    resamp_init(&r, 12000.0, 48000.0);
+    resamp_init(&r, 12000.0, 48000.0, 0.0);
 
     /* DC in -> DC out at unity gain (kernels are unity-DC). */
     int16_t dc_in[400], dc_out[2048];
