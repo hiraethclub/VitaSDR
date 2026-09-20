@@ -316,19 +316,12 @@ int main(int argc, char *argv[])
         ui_show_message(&g_app, "Set host in ux0:data/vitasdr/config.ini");
     }
 
-    double render_last_freq = g_app.freq_khz;
     while (g_app.running) {
         input_poll(&g_app);
 
-        /* On a meaningful retune, reset the waterfall's adaptive contrast so it
-         * re-settles to the new band's noise floor quickly. */
-        if (g_app.freq_khz != render_last_freq) {
-            double d = g_app.freq_khz - render_last_freq;
-            if (d < 0) d = -d;
-            if (d > 5.0)   /* >5 kHz jump */
-                wf_render_reset();
-            render_last_freq = g_app.freq_khz;
-        }
+        /* Note: we deliberately do NOT reset the waterfall contrast on retune.
+         * The percentile floor eases to the new band within ~1s, and resetting
+         * caused a full-scale "green flash" in the spectrum while scanning. */
 
         if (g_app.wf_have_row) {
             wf_push_bins(g_app.wf_bins, g_app.wf_nbins, g_app.palette);

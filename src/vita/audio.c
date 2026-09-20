@@ -52,6 +52,8 @@ static int audio_thread(SceSize args, void *argp)
     vlog("audio_thread start: src_rate=%d out=%d base_need=%d target=%u",
          s_src_rate, OUT_RATE, base_need, (unsigned)target);
 
+    int prev = 0;   /* last source sample of the previous block, for continuity */
+
     while (s_run) {
         /* Adjust consumption toward the target fill level. */
         size_t avail = jitter_available(&s_app->jitter);
@@ -78,11 +80,21 @@ static int audio_thread(SceSize args, void *argp)
          * gain is fixed-point x256. */
         int gain = vol * (AUDIO_MAX_GAIN * 256) / 100;
 
-        /* Upsample need -> OUT_GRAIN (nearest neighbour), mono -> stereo. */
+        /* Upsample need -> OUT_GRAIN with LINEAR interpolation (not
+         * sample-and-hold, which imaged into 6-18 kHz and sounded metallic),
+         * mono -> stereo. The source sequence is [prev, src[0..need-1]] so
+         * blocks join without a discontinuity (which would buzz at the block
+         * rate). pos is 8.8 fixed point spanning the `need` intervals. */
+        int step = (need << 8) / OUT_GRAIN;
+        int pos = 0;
         for (int i = 0; i < OUT_GRAIN; i++) {
-            int si = (int)((long)i * need / OUT_GRAIN);
-            if (si >= need) si = need - 1;
-            int s = ((int)src[si] * gain) >> 8;
+            int i0 = pos >> 8;
+            int frac = pos & 0xff;
+            pos += step;
+            int a = (i0 <= 0) ? prev : (int)src[i0 - 1]; /* value at index i0 */
+            int b = (i0 < need) ? (int)src[i0] : (int)src[need - 1]; /* i0+1 */
+            int interp = a + ((b - a) * frac >> 8);
+            int s = (interp * gain) >> 8;
             /* Soft limiter: above the knee, compress the excess 4:1 rather than
              * hard-clipping (which sounds harsh / like it cuts out). */
             if (s > SOFT_KNEE)
@@ -94,6 +106,7 @@ static int audio_thread(SceSize args, void *argp)
             out[i * 2]     = (int16_t)s;
             out[i * 2 + 1] = (int16_t)s;
         }
+        prev = (int)src[need - 1];  /* carry for the next block's first sample */
 
         sceAudioOutOutput(s_port, out);
 

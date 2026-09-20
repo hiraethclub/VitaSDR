@@ -18,6 +18,12 @@ static unsigned int    s_stride = 0;  /* bytes per row */
 static uint8_t        *s_data = NULL;
 static float           s_floor = -1.0f; /* adaptive noise floor for contrast */
 
+/* Viridis-style control points (perceptually smooth, colour-blind friendly,
+ * easy on the eyes): deep blue/purple -> blue -> teal -> green -> yellow. */
+static const unsigned char VIR_R[5] = {  68,  59,  33,  94, 253 };
+static const unsigned char VIR_G[5] = {   1,  82, 145, 201, 231 };
+static const unsigned char VIR_B[5] = {  84, 139, 140,  98,  37 };
+
 /* Map a power byte (0..255) to a colour for the given palette. */
 static unsigned int palette_color(int palette, unsigned char v)
 {
@@ -26,17 +32,27 @@ static unsigned int palette_color(int palette, unsigned char v)
     case 1: /* grayscale */
         r = g = b = v;
         break;
-    case 2: /* classic: blue -> cyan -> green -> yellow -> red */
+    case 2: /* hot: black -> red -> yellow -> white */
+        if (v < 85)        { r = v * 3;          g = 0;              b = 0; }
+        else if (v < 170)  { r = 255;            g = (v - 85) * 3;   b = 0; }
+        else               { r = 255;            g = 255;            b = (v - 170) * 3; }
+        break;
+    case 3: /* classic: blue -> cyan -> green -> yellow -> red */
         if (v < 64)        { r = 0;              g = v * 4;          b = 255; }
         else if (v < 128)  { r = 0;              g = 255;            b = 255 - (v - 64) * 4; }
         else if (v < 192)  { r = (v - 128) * 4;  g = 255;            b = 0; }
         else               { r = 255;            g = 255 - (v - 192) * 4; b = 0; }
         break;
-    default: /* 0: hot: black -> red -> yellow -> white */
-        if (v < 85)        { r = v * 3;          g = 0;              b = 0; }
-        else if (v < 170)  { r = 255;            g = (v - 85) * 3;   b = 0; }
-        else               { r = 255;            g = 255;            b = (v - 170) * 3; }
+    default: { /* 0: viridis (default, eye-friendly) */
+        float t = (float)v / 255.0f * 4.0f;   /* 0..4 across 5 stops */
+        int seg = (int)t;
+        if (seg > 3) seg = 3;
+        float f = t - (float)seg;
+        r = (int)(VIR_R[seg] + (VIR_R[seg + 1] - VIR_R[seg]) * f);
+        g = (int)(VIR_G[seg] + (VIR_G[seg + 1] - VIR_G[seg]) * f);
+        b = (int)(VIR_B[seg] + (VIR_B[seg + 1] - VIR_B[seg]) * f);
         break;
+    }
     }
     if (r > 255) r = 255;
     if (g > 255) g = 255;
@@ -73,7 +89,9 @@ void wf_render_shutdown(void)
  * and a fixed gain. Shared with the spectrum so both react the same way. */
 unsigned char wf_level(unsigned char v)
 {
-    float f = s_floor < 0.0f ? 0.0f : s_floor;
+    /* Before the floor has been seeded, use a sensible mid default rather than
+     * 0 (which would amplify every bin to full scale -> a green flash). */
+    float f = s_floor < 0.0f ? 64.0f : s_floor;
     int dv = (int)(((float)v - f) * WF_GAIN);
     if (dv < 0) dv = 0;
     if (dv > 255) dv = 255;
