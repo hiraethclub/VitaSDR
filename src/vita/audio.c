@@ -16,16 +16,13 @@
 #include <psp2/audioout.h>
 #include <psp2/kernel/threadmgr.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #define OUT_RATE   48000
 #define OUT_GRAIN  512    /* samples per channel per output (multiple of 64) */
 #define SOFT_KNEE   28000  /* safety soft-limit above this magnitude */
-#define AGC_TARGET  22000  /* peak level the AGC aims for at full volume */
-#define AGC_MAX     24.0f  /* max AGC gain (caps noise amplification in gaps) */
-#define AGC_MIN     0.02f  /* min AGC gain */
-#define AGC_ATTACK  0.30f  /* fast gain reduction when signal gets louder */
-#define AGC_RELEASE 0.02f  /* slow gain increase when signal gets quieter */
+#define AUDIO_GAIN  3      /* fixed gain at volume=100 */
 
 static app_state *s_app = NULL;
 static int        s_port = -1;
@@ -57,7 +54,13 @@ static int audio_thread(SceSize args, void *argp)
          s_src_rate, OUT_RATE, base_need, (unsigned)target);
 
     int prev = 0;         /* last source sample of previous block (continuity) */
-    float agc_gain = 1.0f; /* automatic gain, adapts to keep a steady level */
+
+    /* Debug capture: dump the raw decoded 12 kHz mono PCM (straight from the
+     * ADPCM decoder, before resampling/gain) to a file for the first few
+     * seconds, so the exact decoded audio can be analysed off-device. */
+    FILE *cap = fopen("ux0:data/vitasdr/audio.raw", "wb");
+    long cap_left = (long)s_src_rate * 6; /* ~6 seconds */
+    vlog("audio capture %s", cap ? "open (ux0:data/vitasdr/audio.raw)" : "FAILED");
 
     while (s_run) {
         /* Adjust consumption toward the target fill level. */
@@ -75,45 +78,41 @@ static int audio_thread(SceSize args, void *argp)
                 s_app->audio_underruns++;
         }
 
+        /* Capture the raw decoded PCM (real samples only) to disk. */
+        if (cap && cap_left > 0 && got > 0) {
+            size_t w = (size_t)cap_left < got ? (size_t)cap_left : got;
+            fwrite(src, sizeof(int16_t), w, cap);
+            cap_left -= (long)w;
+            if (cap_left <= 0) {
+                fclose(cap);
+                cap = NULL;
+                vlog("audio capture complete");
+            }
+        }
+
         int vol = s_app->volume;
         if (vol < 0) vol = 0;
         if (vol > 100) vol = 100;
 
-        /* AGC: measure this block's peak and steer the gain so the output sits
-         * near a consistent target regardless of mode (AM runs much hotter than
-         * SSB) or signal strength -- and never has to clip. Fast attack (drop
-         * gain quickly on a loud burst), slow release (raise it gently). Volume
-         * scales the target. This replaces the old fixed multiplier that made
-         * AM clip (the "metallic" distortion) while SSB stayed quiet. */
-        int peak = 1;
-        for (int k = 0; k < need; k++) {
-            int a = src[k] < 0 ? -src[k] : src[k];
-            if (a > peak) peak = a;
-        }
-        float eff_target = (float)AGC_TARGET * (float)vol / 100.0f;
-        float desired = eff_target / (float)peak;
-        if (desired > AGC_MAX) desired = AGC_MAX;
-        if (desired < AGC_MIN) desired = AGC_MIN;
-        if (desired < agc_gain)
-            agc_gain += (desired - agc_gain) * AGC_ATTACK;
-        else
-            agc_gain += (desired - agc_gain) * AGC_RELEASE;
+        /* Simple fixed gain (volume slider). Deliberately NOT a per-block AGC:
+         * updating gain every ~10 ms modulated speech and sounded metallic. */
+        int gain = vol * (AUDIO_GAIN * 256) / 100;
 
         /* Upsample need -> OUT_GRAIN with LINEAR interpolation (not
          * sample-and-hold, which imaged into 6-18 kHz and sounded metallic),
          * mono -> stereo. The source sequence is [prev, src[0..need-1]] so
          * blocks join without a discontinuity (which would buzz at the block
          * rate). pos is 8.8 fixed point spanning the `need` intervals. */
-        int step = (need << 8) / OUT_GRAIN;
-        int pos = 0;
+        float stepf = (float)need / (float)OUT_GRAIN;
+        float posf = 0.0f;
         for (int i = 0; i < OUT_GRAIN; i++) {
-            int i0 = pos >> 8;
-            int frac = pos & 0xff;
-            pos += step;
+            int i0 = (int)posf;
+            float fr = posf - (float)i0;
+            posf += stepf;
             int a = (i0 <= 0) ? prev : (int)src[i0 - 1]; /* value at index i0 */
             int b = (i0 < need) ? (int)src[i0] : (int)src[need - 1]; /* i0+1 */
-            int interp = a + ((b - a) * frac >> 8);
-            int s = (int)((float)interp * agc_gain);
+            int interp = a + (int)((float)(b - a) * fr);
+            int s = (interp * gain) >> 8;
             /* Soft limiter: above the knee, compress the excess 4:1 rather than
              * hard-clipping (which sounds harsh / like it cuts out). */
             if (s > SOFT_KNEE)
@@ -133,6 +132,8 @@ static int audio_thread(SceSize args, void *argp)
             vlog("audio: outputs=%lu jitter=%u", outputs,
                  (unsigned)jitter_available(&s_app->jitter));
     }
+    if (cap)
+        fclose(cap);
     return 0;
 }
 
