@@ -25,8 +25,8 @@
 #define OUT_GRAIN  512    /* samples per channel per output (multiple of 64) */
 #define SOFT_KNEE   28000  /* safety soft-limit above this magnitude */
 #define AUDIO_GAIN  3      /* fixed gain at volume=100 */
-#define AUDIO_LP_HZ 3800.0 /* audio low-pass corner: tames harsh HF hiss that
-                            * desktop clients filter but we were playing raw */
+#define AUDIO_LP_HZ 4500.0 /* audio low-pass corner: matches the ~4.5 kHz roll-
+                            * off seen on desktop clients for the AM passband */
 #define DC_R        0.995f /* DC blocker pole (~10 Hz corner at 12 kHz) */
 
 static app_state *s_app = NULL;
@@ -42,8 +42,14 @@ static resamp    s_rs;
 static int audio_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    int16_t src[OUT_GRAIN];        /* resampled (mono) samples for one grain */
-    int16_t out[OUT_GRAIN * 2];    /* interleaved stereo output */
+    int16_t src[OUT_GRAIN];         /* resampled (mono) samples for one grain */
+    /* Double buffer: sceAudioOutOutput plays a grain asynchronously (DMA), so
+     * we must not touch the buffer it is still reading. Ping-pong between two
+     * so the next grain is built in the idle buffer. A single reused buffer
+     * corrupted the tail of every grain -> a 93.75 Hz grain-rate buzz
+     * (48000/512) that sounded metallic. */
+    static int16_t outbuf[2][OUT_GRAIN * 2];
+    int           bufidx = 0;
     unsigned long outputs = 0;
 
     /* Nominal source samples per output sample (~0.25 at 12k->48k). Drift
@@ -139,6 +145,7 @@ static int audio_thread(SceSize args, void *argp)
          * updating gain every ~10 ms modulated speech and sounded metallic. */
         int gain = vol * (AUDIO_GAIN * 256) / 100;
 
+        int16_t *out = outbuf[bufidx & 1];
         for (int i = 0; i < OUT_GRAIN; i++) {
             int s = ((int)src[i] * gain) >> 8;
             /* Soft limiter: above the knee, compress the excess 4:1 rather than
@@ -154,6 +161,7 @@ static int audio_thread(SceSize args, void *argp)
         }
 
         sceAudioOutOutput(s_port, out);
+        bufidx++;   /* next grain builds in the other buffer while this plays */
 
         if ((++outputs % 200) == 0)
             vlog("audio: outputs=%lu jitter=%u", outputs,
