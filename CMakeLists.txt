@@ -81,10 +81,12 @@ if(VITA)
       m)
 
   vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME} UNSAFE)
+  ## NOTE: a custom sce_sys/icon0.png made VitaShell reject the package
+  ## (install error 0x80113D...), so we ship with the default bubble for now.
+  ## Revisit with a correctly-formatted icon later.
   vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
       VERSION ${VITA_VERSION}
-      NAME ${VITA_APP_NAME}
-      FILE ${CMAKE_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png)
+      NAME ${VITA_APP_NAME})
 
 else()
   ## ---------------- Native test build ----------------
