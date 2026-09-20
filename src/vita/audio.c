@@ -20,8 +20,12 @@
 
 #define OUT_RATE   48000
 #define OUT_GRAIN  512    /* samples per channel per output (multiple of 64) */
-#define AUDIO_MAX_GAIN 4  /* max software gain at volume=100 (radio audio is low) */
-#define SOFT_KNEE 24000   /* soft-limit above this magnitude instead of hard clip */
+#define SOFT_KNEE   28000  /* safety soft-limit above this magnitude */
+#define AGC_TARGET  22000  /* peak level the AGC aims for at full volume */
+#define AGC_MAX     24.0f  /* max AGC gain (caps noise amplification in gaps) */
+#define AGC_MIN     0.02f  /* min AGC gain */
+#define AGC_ATTACK  0.30f  /* fast gain reduction when signal gets louder */
+#define AGC_RELEASE 0.02f  /* slow gain increase when signal gets quieter */
 
 static app_state *s_app = NULL;
 static int        s_port = -1;
@@ -52,7 +56,8 @@ static int audio_thread(SceSize args, void *argp)
     vlog("audio_thread start: src_rate=%d out=%d base_need=%d target=%u",
          s_src_rate, OUT_RATE, base_need, (unsigned)target);
 
-    int prev = 0;   /* last source sample of the previous block, for continuity */
+    int prev = 0;         /* last source sample of previous block (continuity) */
+    float agc_gain = 1.0f; /* automatic gain, adapts to keep a steady level */
 
     while (s_run) {
         /* Adjust consumption toward the target fill level. */
@@ -74,11 +79,25 @@ static int audio_thread(SceSize args, void *argp)
         if (vol < 0) vol = 0;
         if (vol > 100) vol = 100;
 
-        /* Volume is a GAIN, not just attenuation: receiver audio (SSB/AM) sits
-         * well below full scale, so unity is too quiet. Map the slider to
-         * 0..MAX_GAIN and clamp to int16 (peaks clip rather than wrap).
-         * gain is fixed-point x256. */
-        int gain = vol * (AUDIO_MAX_GAIN * 256) / 100;
+        /* AGC: measure this block's peak and steer the gain so the output sits
+         * near a consistent target regardless of mode (AM runs much hotter than
+         * SSB) or signal strength -- and never has to clip. Fast attack (drop
+         * gain quickly on a loud burst), slow release (raise it gently). Volume
+         * scales the target. This replaces the old fixed multiplier that made
+         * AM clip (the "metallic" distortion) while SSB stayed quiet. */
+        int peak = 1;
+        for (int k = 0; k < need; k++) {
+            int a = src[k] < 0 ? -src[k] : src[k];
+            if (a > peak) peak = a;
+        }
+        float eff_target = (float)AGC_TARGET * (float)vol / 100.0f;
+        float desired = eff_target / (float)peak;
+        if (desired > AGC_MAX) desired = AGC_MAX;
+        if (desired < AGC_MIN) desired = AGC_MIN;
+        if (desired < agc_gain)
+            agc_gain += (desired - agc_gain) * AGC_ATTACK;
+        else
+            agc_gain += (desired - agc_gain) * AGC_RELEASE;
 
         /* Upsample need -> OUT_GRAIN with LINEAR interpolation (not
          * sample-and-hold, which imaged into 6-18 kHz and sounded metallic),
@@ -94,7 +113,7 @@ static int audio_thread(SceSize args, void *argp)
             int a = (i0 <= 0) ? prev : (int)src[i0 - 1]; /* value at index i0 */
             int b = (i0 < need) ? (int)src[i0] : (int)src[need - 1]; /* i0+1 */
             int interp = a + ((b - a) * frac >> 8);
-            int s = (interp * gain) >> 8;
+            int s = (int)((float)interp * agc_gain);
             /* Soft limiter: above the knee, compress the excess 4:1 rather than
              * hard-clipping (which sounds harsh / like it cuts out). */
             if (s > SOFT_KNEE)
