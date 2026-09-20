@@ -36,15 +36,31 @@ static int audio_thread(SceSize args, void *argp)
     int16_t out[OUT_GRAIN * 2];    /* interleaved stereo output */
     unsigned long outputs = 0;
 
-    /* Source samples consumed per output grain. */
-    int need = (int)((long)OUT_GRAIN * s_src_rate / OUT_RATE);
-    if (need < 1) need = 1;
-    if (need > OUT_GRAIN) need = OUT_GRAIN;
+    /* Nominal source samples consumed per output grain. */
+    int base_need = (int)((long)OUT_GRAIN * s_src_rate / OUT_RATE);
+    if (base_need < 2) base_need = 2;
+    if (base_need > OUT_GRAIN) base_need = OUT_GRAIN;
 
-    vlog("audio_thread start: src_rate=%d out=%d need=%d", s_src_rate,
-         OUT_RATE, need);
+    /* Drift correction target: hold the jitter buffer near ~0.3s so latency is
+     * bounded and the tiny clock mismatch between our 48 kHz-derived consume
+     * rate and the receiver's true ~11998.9 Hz can't slowly fill or drain it.
+     * We consume one extra / one fewer source sample per block to nudge the
+     * effective playback rate by <1% (inaudible). */
+    const size_t target = (size_t)(s_src_rate * 3 / 10); /* 0.3s of audio */
+    const size_t margin = (size_t)(s_src_rate / 20);     /* 0.05s hysteresis */
+
+    vlog("audio_thread start: src_rate=%d out=%d base_need=%d target=%u",
+         s_src_rate, OUT_RATE, base_need, (unsigned)target);
 
     while (s_run) {
+        /* Adjust consumption toward the target fill level. */
+        size_t avail = jitter_available(&s_app->jitter);
+        int need = base_need;
+        if (avail > target + margin && base_need + 1 <= OUT_GRAIN)
+            need = base_need + 1;   /* running long -> drain slightly faster */
+        else if (avail < target - margin && base_need - 1 >= 2)
+            need = base_need - 1;   /* running short -> drain slightly slower */
+
         size_t got = jitter_pop(&s_app->jitter, src, (size_t)need);
         if (got < (size_t)need) {
             memset(src + got, 0, ((size_t)need - got) * sizeof(int16_t));
