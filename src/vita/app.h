@@ -89,6 +89,7 @@ void wf_render_shutdown(void);
 void wf_push_bins(const unsigned char *bins, int nbins, int palette);
 void wf_render_draw(int x, int y, int w, int h);
 void wf_render_reset(void);   /* reset adaptive contrast (e.g. on retune) */
+unsigned char wf_level(unsigned char v); /* noise-floor + gain applied to a bin */
 
 /* ui.c */
 void ui_draw(app_state *app);

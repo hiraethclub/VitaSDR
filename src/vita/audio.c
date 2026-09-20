@@ -20,7 +20,8 @@
 
 #define OUT_RATE   48000
 #define OUT_GRAIN  512    /* samples per channel per output (multiple of 64) */
-#define AUDIO_MAX_GAIN 8  /* max software gain at volume=100 (radio audio is low) */
+#define AUDIO_MAX_GAIN 4  /* max software gain at volume=100 (radio audio is low) */
+#define SOFT_KNEE 24000   /* soft-limit above this magnitude instead of hard clip */
 
 static app_state *s_app = NULL;
 static int        s_port = -1;
@@ -66,6 +67,12 @@ static int audio_thread(SceSize args, void *argp)
             int si = (int)((long)i * need / OUT_GRAIN);
             if (si >= need) si = need - 1;
             int s = ((int)src[si] * gain) >> 8;
+            /* Soft limiter: above the knee, compress the excess 4:1 rather than
+             * hard-clipping (which sounds harsh / like it cuts out). */
+            if (s > SOFT_KNEE)
+                s = SOFT_KNEE + (s - SOFT_KNEE) / 4;
+            else if (s < -SOFT_KNEE)
+                s = -SOFT_KNEE + (s + SOFT_KNEE) / 4;
             if (s > 32767) s = 32767;
             else if (s < -32768) s = -32768;
             out[i * 2]     = (int16_t)s;

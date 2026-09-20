@@ -126,7 +126,7 @@ static void draw_spectrum(app_state *app)
     for (int x = 0; x < SCREEN_W; x++) {
         int idx = (int)((long)x * n / SCREEN_W);
         if (idx >= n) idx = n - 1;
-        unsigned char v = app->wf_bins[idx];
+        unsigned char v = wf_level(app->wf_bins[idx]); /* floor-subtracted, sensitive */
         int barh = SPEC_H * v / 255;
         vita2d_draw_rectangle(x, SPEC_Y + (SPEC_H - barh), 1, barh, COL_SPEC);
     }

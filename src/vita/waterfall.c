@@ -67,25 +67,48 @@ void wf_render_shutdown(void)
     }
 }
 
+#define WF_GAIN 3.0f   /* contrast above the noise floor */
+
+/* Map a raw bin byte to a 0..255 display level using the current noise floor
+ * and a fixed gain. Shared with the spectrum so both react the same way. */
+unsigned char wf_level(unsigned char v)
+{
+    float f = s_floor < 0.0f ? 0.0f : s_floor;
+    int dv = (int)(((float)v - f) * WF_GAIN);
+    if (dv < 0) dv = 0;
+    if (dv > 255) dv = 255;
+    return (unsigned char)dv;
+}
+
+/* Estimate the noise floor as a low percentile of the row. Using a percentile
+ * (not the minimum) is robust: a single deep null no longer drags the floor
+ * down and blows the whole display out to white. */
+static float estimate_floor(const unsigned char *bins, int nbins)
+{
+    unsigned hist[256];
+    memset(hist, 0, sizeof(hist));
+    for (int i = 0; i < nbins; i++)
+        hist[bins[i]]++;
+    unsigned target = (unsigned)nbins / 5; /* 20th percentile */
+    unsigned cum = 0;
+    for (int v = 0; v < 256; v++) {
+        cum += hist[v];
+        if (cum >= target)
+            return (float)v;
+    }
+    return 0.0f;
+}
+
 void wf_push_bins(const unsigned char *bins, int nbins, int palette)
 {
     if (!s_data || nbins <= 0)
         return;
 
-    /* Contrast: subtract an adaptive noise floor, then apply a FIXED gain.
-     * (The previous version scaled by 255/(max-min), which saturated to solid
-     * yellow whenever the level range was narrow.) Fixed gain keeps the noise
-     * floor dark and lets signals rise above it without blowing out. */
-    int rmin = 255;
-    for (int i = 0; i < nbins; i++)
-        if (bins[i] < rmin) rmin = bins[i];
-
+    float target = estimate_floor(bins, nbins);
     if (s_floor < 0.0f)
-        s_floor = (float)rmin;              /* seed on first row */
+        s_floor = target;                       /* seed on first row */
     else
-        s_floor += ((float)rmin - s_floor) * 0.05f;  /* slow drift */
-
-    const float gain = 2.0f;
+        s_floor += (target - s_floor) * 0.10f;  /* ease toward it */
 
     /* Scroll everything down by one row. */
     memmove(s_data + s_stride, s_data, s_stride * (WF_TEX_H - 1));
@@ -95,10 +118,7 @@ void wf_push_bins(const unsigned char *bins, int nbins, int palette)
     for (int x = 0; x < WF_TEX_W; x++) {
         int idx = (int)((long)x * nbins / WF_TEX_W);
         if (idx >= nbins) idx = nbins - 1;
-        int dv = (int)(((float)bins[idx] - s_floor) * gain);
-        if (dv < 0) dv = 0;
-        if (dv > 255) dv = 255;
-        row[x] = palette_color(palette, (unsigned char)dv);
+        row[x] = palette_color(palette, wf_level(bins[idx]));
     }
 }
 
