@@ -32,7 +32,8 @@ set(CORE_SOURCES
     src/core/adpcm.c
     src/core/jitter.c
     src/core/ws_client.c
-    src/core/kiwi.c)
+    src/core/kiwi.c
+    src/core/bandplan.c)
 
 if(VITA)
   ## ---------------- Vita VPK build ----------------

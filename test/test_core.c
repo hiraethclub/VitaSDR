@@ -5,6 +5,7 @@
  * and a full WebSocket handshake + frame round-trip against a loopback server
  * running in a second thread. No external network is used. */
 #include "adpcm.h"
+#include "bandplan.h"
 #include "jitter.h"
 #include "kiwi.h"
 #include "net.h"
@@ -343,12 +344,23 @@ static void test_websocket_recv_timeout(void)
     close(sv[1]);
 }
 
+static void test_bandplan(void)
+{
+    printf("[bandplan]\n");
+    CHECK(strcmp(band_lookup(7074.0), "40m Amateur") == 0, "7074 -> 40m Amateur");
+    CHECK(strcmp(band_lookup(17735.0), "16m SWBC") == 0, "17735 -> 16m SWBC");
+    CHECK(strcmp(band_lookup(14200.0), "20m Amateur") == 0, "14200 -> 20m Amateur");
+    CHECK(strcmp(band_lookup(1000.0), "MW Broadcast") == 0, "1000 -> MW Broadcast");
+    CHECK(band_lookup(100000.0)[0] == '\0', "out-of-plan -> empty");
+}
+
 int main(void)
 {
     printf("VitaSDR core tests\n==================\n");
     test_adpcm();
     test_jitter();
     test_kiwi_parse();
+    test_bandplan();
     test_websocket_loopback();
     test_websocket_recv_timeout();
     printf("==================\n%d passed, %d failed\n", g_pass, g_fail);

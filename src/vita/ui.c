@@ -1,6 +1,7 @@
 /* Screen drawing: status bar, waterfall, spectrum, frequency ruler, sliders.
  * All drawing happens between vita2d_start_drawing/end_drawing in main.c. */
 #include "app.h"
+#include "bandplan.h"
 
 #include <vita2d.h>
 
@@ -177,6 +178,36 @@ static void draw_sliders(app_state *app)
     draw_slider(x, BOTTOM_Y + 30, w, "VOL", app->volume, COL_ACCENT);
 }
 
+/* Passband + carrier overlay: a translucent band showing the demodulator's
+ * filter width and a centre line at the tuned frequency, so the user can see
+ * where to put a signal and how wide the mode listens. */
+static void draw_passband(app_state *app)
+{
+    double span_khz = 30000.0 / (double)(1 << app->zoom);
+    double span_hz = span_khz * 1000.0;
+    if (span_hz < 1.0)
+        return;
+    float pxhz = (float)SCREEN_W / (float)span_hz;
+    int cx = SCREEN_W / 2;
+
+    int lo, hi;
+    kiwi_default_passband(app->mode, &lo, &hi);
+    int x_lo = cx + (int)(lo * pxhz);
+    int x_hi = cx + (int)(hi * pxhz);
+    if (x_lo > x_hi) { int t = x_lo; x_lo = x_hi; x_hi = t; }
+    if (x_lo < 0) x_lo = 0;
+    if (x_hi > SCREEN_W) x_hi = SCREEN_W;
+
+    int top = WF_Y;
+    int hgt = WF_H + SPEC_H;
+    if (x_hi > x_lo)
+        vita2d_draw_rectangle(x_lo, top, x_hi - x_lo, hgt,
+                              RGBA8(80, 200, 255, 40));   /* passband fill */
+    vita2d_draw_rectangle(x_lo, top, 1, hgt, RGBA8(80, 200, 255, 170));
+    vita2d_draw_rectangle(x_hi - 1, top, 1, hgt, RGBA8(80, 200, 255, 170));
+    vita2d_draw_rectangle(cx, top, 1, hgt, RGBA8(255, 80, 80, 210)); /* carrier */
+}
+
 void ui_draw(app_state *app)
 {
     ensure_font();
@@ -184,9 +215,16 @@ void ui_draw(app_state *app)
     vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
     wf_render_draw(0, WF_Y, SCREEN_W, WF_H);
     draw_spectrum(app);
+    draw_passband(app);
     draw_ruler(app);
     draw_sliders(app);
     draw_status_bar(app);
+
+    /* Band name (from the band plan) over the top-left of the waterfall. */
+    const char *band = band_lookup(app->freq_khz);
+    if (band[0])
+        vita2d_pgf_draw_textf(s_font, 8, WF_Y + 20, COL_ACCENT, 0.9f,
+                              "%s", band);
 
     /* Persistent error reason while disconnected in the error state. */
     if (app->conn_status == CONN_ERROR && app->last_err[0]) {

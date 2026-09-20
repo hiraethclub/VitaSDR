@@ -16,6 +16,7 @@
 static vita2d_texture *s_tex = NULL;
 static unsigned int    s_stride = 0;  /* bytes per row */
 static uint8_t        *s_data = NULL;
+static float           s_floor = -1.0f; /* adaptive noise floor for contrast */
 
 /* Map a power byte (0..255) to a colour for the given palette. */
 static unsigned int palette_color(int palette, unsigned char v)
@@ -71,24 +72,20 @@ void wf_push_bins(const unsigned char *bins, int nbins, int palette)
     if (!s_data || nbins <= 0)
         return;
 
-    /* Adaptive contrast: map the observed level range onto the full palette so
-     * the waterfall stays visible whatever the absolute byte levels are. Track
-     * a slowly-adapting floor (min) and peak (max); stretch each row across
-     * them. Without this, a quiet band or an unexpected dB window renders as a
-     * flat near-black block. */
-    static float a_min = 40.0f, a_max = 200.0f;
-    int rmin = 255, rmax = 0;
-    for (int i = 0; i < nbins; i++) {
-        int v = bins[i];
-        if (v < rmin) rmin = v;
-        if (v > rmax) rmax = v;
-    }
-    /* Ease the adaptive window toward this row (floor faster than peak so
-     * transient signals stay bright). */
-    a_min += ((float)rmin - a_min) * 0.10f;
-    a_max += ((float)rmax - a_max) * 0.02f;
-    if (a_max < a_min + 16.0f) a_max = a_min + 16.0f;
-    float scale = 255.0f / (a_max - a_min);
+    /* Contrast: subtract an adaptive noise floor, then apply a FIXED gain.
+     * (The previous version scaled by 255/(max-min), which saturated to solid
+     * yellow whenever the level range was narrow.) Fixed gain keeps the noise
+     * floor dark and lets signals rise above it without blowing out. */
+    int rmin = 255;
+    for (int i = 0; i < nbins; i++)
+        if (bins[i] < rmin) rmin = bins[i];
+
+    if (s_floor < 0.0f)
+        s_floor = (float)rmin;              /* seed on first row */
+    else
+        s_floor += ((float)rmin - s_floor) * 0.05f;  /* slow drift */
+
+    const float gain = 2.0f;
 
     /* Scroll everything down by one row. */
     memmove(s_data + s_stride, s_data, s_stride * (WF_TEX_H - 1));
@@ -98,11 +95,17 @@ void wf_push_bins(const unsigned char *bins, int nbins, int palette)
     for (int x = 0; x < WF_TEX_W; x++) {
         int idx = (int)((long)x * nbins / WF_TEX_W);
         if (idx >= nbins) idx = nbins - 1;
-        int dv = (int)(((float)bins[idx] - a_min) * scale);
+        int dv = (int)(((float)bins[idx] - s_floor) * gain);
         if (dv < 0) dv = 0;
         if (dv > 255) dv = 255;
         row[x] = palette_color(palette, (unsigned char)dv);
     }
+}
+
+/* Reset the adaptive noise floor (e.g. on retune) so the display re-settles. */
+void wf_render_reset(void)
+{
+    s_floor = -1.0f;
 }
 
 void wf_render_draw(int x, int y, int w, int h)

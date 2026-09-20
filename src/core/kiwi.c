@@ -259,10 +259,13 @@ static int wf_send_config(kiwi_wf *w)
      * the dB window mapped onto the 0..255 bin bytes -- without them the data
      * is poorly scaled (looks blank). interp=13 matches the reference. */
     if (ws_send_text(&w->ws, "SET wf_comp=0") != 0) return -1;
+    /* dB window mapped onto the 0..255 bin bytes (proven to give good spectrum
+     * structure on device); the renderer subtracts an adaptive noise floor. */
     if (ws_send_text(&w->ws, "SET maxdb=-10 mindb=-110") != 0) return -1;
     snprintf(cmd, sizeof(cmd), "SET zoom=%d cf=%.3f", w->zoom, w->freq_khz);
     if (ws_send_text(&w->ws, cmd) != 0) return -1;
-    if (ws_send_text(&w->ws, "SET wf_speed=1") != 0) return -1;
+    /* wf_speed 1..4; 4 is the fastest update rate (1 was ~1 fps = crawling). */
+    if (ws_send_text(&w->ws, "SET wf_speed=4") != 0) return -1;
     if (ws_send_text(&w->ws, "SET interp=13") != 0) return -1;
     if (ws_send_text(&w->ws, "SET keepalive") != 0) return -1;
     w->configured = 1;

@@ -88,6 +88,7 @@ int  wf_render_init(void);
 void wf_render_shutdown(void);
 void wf_push_bins(const unsigned char *bins, int nbins, int palette);
 void wf_render_draw(int x, int y, int w, int h);
+void wf_render_reset(void);   /* reset adaptive contrast (e.g. on retune) */
 
 /* ui.c */
 void ui_draw(app_state *app);
