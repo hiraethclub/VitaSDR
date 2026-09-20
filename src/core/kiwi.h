@@ -101,6 +101,12 @@ int kiwi_handle_msg(kiwi_client *k, const char *body, size_t len);
  * pushed, or <0 on malformed input. */
 int kiwi_handle_snd(kiwi_client *k, const unsigned char *frame, size_t len);
 
+/* Optional debug tap: if set, called for each SND frame with the flags byte
+ * and the raw audio payload (bytes after the 10-byte header, i.e. the raw
+ * IMA-ADPCM when the COMPRESSED flag is set). NULL by default. */
+extern void (*kiwi_snd_tap)(unsigned char flags, const unsigned char *audio,
+                            int audio_len);
+
 /* ================= Waterfall (W/F) stream ================= */
 
 #define KIWI_WF_BINS 1024

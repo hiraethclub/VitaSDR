@@ -28,6 +28,28 @@ static uint64_t now_ms(void)
     return sceKernelGetProcessTimeWide() / 1000ull;
 }
 
+/* Debug: capture the raw ADPCM payload of the first ~6s of SND frames to
+ * ux0:data/vitasdr/adpcm.raw, so the exact received compressed audio can be
+ * decoded off-device with a reference decoder to validate our decode. */
+static FILE  *s_adpcm_cap = NULL;
+static long   s_adpcm_left = 0;
+static void adpcm_capture(unsigned char flags, const unsigned char *audio,
+                          int audio_len)
+{
+    if (!s_adpcm_cap || s_adpcm_left <= 0 || audio_len <= 0)
+        return;
+    if (!(flags & 0x10))   /* only capture COMPRESSED (ADPCM) payloads */
+        return;
+    int w = audio_len < s_adpcm_left ? audio_len : (int)s_adpcm_left;
+    fwrite(audio, 1, (size_t)w, s_adpcm_cap);
+    s_adpcm_left -= w;
+    if (s_adpcm_left <= 0) {
+        fclose(s_adpcm_cap);
+        s_adpcm_cap = NULL;
+        vlog("adpcm capture complete");
+    }
+}
+
 /* ---------------- network thread (SND) ---------------- */
 
 static void net_disconnect(kiwi_client *k, int *connected, int error)
@@ -284,6 +306,12 @@ int main(int argc, char *argv[])
     if (jitter_init(&g_app.jitter, JITTER_CAP) != 0)
         return -1;
     g_app.lock = sceKernelCreateMutex("vitasdr_lock", 0, 0, NULL);
+
+    /* Install the ADPCM debug capture (first ~6s of compressed payload). */
+    s_adpcm_cap = fopen("ux0:data/vitasdr/adpcm.raw", "wb");
+    s_adpcm_left = 12000 / 2 * 6;   /* ~6s of ADPCM (2 samples/byte @ 12kHz) */
+    kiwi_snd_tap = adpcm_capture;
+    vlog("adpcm capture %s", s_adpcm_cap ? "open" : "FAILED");
 
     int net_ok = (net_global_init() == 0);
     if (!net_ok) {

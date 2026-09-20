@@ -16,6 +16,10 @@
  * few hundred bytes of ADPCM (~2 samples/byte); 8192 samples is ample. */
 #define KIWI_MAX_SAMPLES 8192
 
+/* Optional debug tap (see kiwi.h). */
+void (*kiwi_snd_tap)(unsigned char flags, const unsigned char *audio,
+                     int audio_len) = NULL;
+
 void kiwi_default_passband(const char *mode, int *low_cut, int *high_cut)
 {
     if (strcmp(mode, "lsb") == 0)      { *low_cut = -2700; *high_cut = -300; }
@@ -165,6 +169,9 @@ int kiwi_handle_snd(kiwi_client *k, const unsigned char *frame, size_t len)
 
     const unsigned char *audio = b + 7;
     size_t audio_len = len - 10;
+
+    if (kiwi_snd_tap)
+        kiwi_snd_tap(flags, audio, (int)audio_len);
 
     static int16_t pcm[KIWI_MAX_SAMPLES];
     size_t nsamp = 0;
