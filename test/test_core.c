@@ -9,9 +9,11 @@
 #include "jitter.h"
 #include "kiwi.h"
 #include "net.h"
+#include "resamp.h"
 #include "ws_client.h"
 
 #include <arpa/inet.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -354,6 +356,84 @@ static void test_bandplan(void)
     CHECK(band_lookup(100000.0)[0] == '\0', "out-of-plan -> empty");
 }
 
+/* -------------------- resampler -------------------- */
+
+/* Goertzel: magnitude of frequency `f` in an int16 buffer sampled at `rate`. */
+static double goertzel(const int16_t *x, int n, double f, double rate)
+{
+    double w = 2.0 * M_PI * f / rate;
+    double c = 2.0 * cos(w);
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0;
+    int i;
+    for (i = 0; i < n; i++) {
+        s0 = (double)x[i] + c * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return sqrt(s1 * s1 + s2 * s2 - c * s1 * s2);
+}
+
+/* Run `nin` source samples through the resampler and collect all outputs. */
+static int run_resamp(resamp *r, const int16_t *in, int nin,
+                      int16_t *out, int outcap)
+{
+    int i = 0, produced = 0;
+    while (i < nin && produced < outcap) {
+        int chunk = 128;
+        if (chunk > nin - i) chunk = nin - i;
+        resamp_push(r, in + i, chunk);
+        i += chunk;
+        produced += resamp_pull(r, out + produced, outcap - produced);
+    }
+    return produced;
+}
+
+static void test_resamp(void)
+{
+    printf("[resamp]\n");
+    resamp r;
+    resamp_init(&r, 12000.0, 48000.0);
+
+    /* DC in -> DC out at unity gain (kernels are unity-DC). */
+    int16_t dc_in[400], dc_out[2048];
+    for (int i = 0; i < 400; i++) dc_in[i] = 8000;
+    int n = run_resamp(&r, dc_in, 400, dc_out, 2048);
+    CHECK(n > 1200, "resamp produced ~4x output for DC");
+    /* Skip warm-up; check a steady sample near the end. */
+    CHECK(dc_out[n - 10] > 7900 && dc_out[n - 10] < 8100,
+          "resamp DC gain ~= unity");
+
+    /* 5.5 kHz full-scale sine (near the 6 kHz source Nyquist). A linear
+     * interpolator would image this to 6.5 kHz at ~20% amplitude; the
+     * windowed-sinc kernel must suppress that image hard. */
+    resamp_reset(&r);
+    int16_t si_in[2000], si_out[8192];
+    for (int i = 0; i < 2000; i++)
+        si_in[i] = (int16_t)(20000.0 * sin(2.0 * M_PI * 5500.0 * i / 12000.0));
+    n = run_resamp(&r, si_in, 2000, si_out, 8192);
+    CHECK(n > 6000, "resamp produced output for sine");
+    /* Measure over a steady interior window (avoid the warm-up transient). */
+    int off = 512, win = n - 1024;
+    double sig = goertzel(si_out + off, win, 5500.0, 48000.0);
+    double img = goertzel(si_out + off, win, 6500.0, 48000.0);
+    CHECK(sig > 0.0 && img / sig < 0.05,
+          "resamp suppresses 6.5 kHz image below 5% of signal");
+
+    /* A mid-band 1 kHz tone passes through with its amplitude intact. */
+    resamp_reset(&r);
+    for (int i = 0; i < 2000; i++)
+        si_in[i] = (int16_t)(15000.0 * sin(2.0 * M_PI * 1000.0 * i / 12000.0));
+    n = run_resamp(&r, si_in, 2000, si_out, 8192);
+    off = 512; win = n - 1024;
+    double pass = goertzel(si_out + off, win, 1000.0, 48000.0);
+    double ref  = goertzel(si_in + 100, 1800, 1000.0, 12000.0);
+    /* Output window is ~4x longer, so its Goertzel sum scales ~4x. Compare the
+     * per-sample-normalised magnitudes. */
+    double out_norm = pass / win, in_norm = ref / 1800.0;
+    CHECK(out_norm > 0.85 * in_norm && out_norm < 1.15 * in_norm,
+          "resamp passes 1 kHz tone with amplitude intact");
+}
+
 int main(void)
 {
     printf("VitaSDR core tests\n==================\n");
@@ -361,6 +441,7 @@ int main(void)
     test_jitter();
     test_kiwi_parse();
     test_bandplan();
+    test_resamp();
     test_websocket_loopback();
     test_websocket_recv_timeout();
     printf("==================\n%d passed, %d failed\n", g_pass, g_fail);

@@ -33,7 +33,8 @@ set(CORE_SOURCES
     src/core/jitter.c
     src/core/ws_client.c
     src/core/kiwi.c
-    src/core/bandplan.c)
+    src/core/bandplan.c
+    src/core/resamp.c)
 
 if(VITA)
   ## ---------------- Vita VPK build ----------------
@@ -102,7 +103,7 @@ else()
   target_include_directories(vitasdr_test PRIVATE src/core)
 
   find_package(Threads REQUIRED)
-  target_link_libraries(vitasdr_test Threads::Threads)
+  target_link_libraries(vitasdr_test Threads::Threads m)
 
   enable_testing()
   add_test(NAME core COMMAND vitasdr_test)

@@ -13,6 +13,7 @@
 #include "app.h"
 #include "log.h"
 #include "b64.h"
+#include "resamp.h"
 
 #include <psp2/audioout.h>
 #include <psp2/kernel/threadmgr.h>
@@ -31,30 +32,30 @@ static SceUID     s_thread = -1;
 static volatile int s_run = 0;
 static int        s_src_rate = 12000;
 
+/* Upsampler 12 kHz -> 48 kHz. Static (not on the audio thread stack) because
+ * its kernel table is ~25 KB and there is only ever one audio thread. */
+static resamp    s_rs;
+
 static int audio_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    int16_t src[OUT_GRAIN];        /* source (mono) samples for one grain */
+    int16_t src[OUT_GRAIN];        /* resampled (mono) samples for one grain */
     int16_t out[OUT_GRAIN * 2];    /* interleaved stereo output */
     unsigned long outputs = 0;
 
-    /* Nominal source samples consumed per output grain. */
-    int base_need = (int)((long)OUT_GRAIN * s_src_rate / OUT_RATE);
-    if (base_need < 2) base_need = 2;
-    if (base_need > OUT_GRAIN) base_need = OUT_GRAIN;
+    /* Nominal source samples per output sample (~0.25 at 12k->48k). Drift
+     * correction nudges this by <1% (inaudible) to keep the jitter buffer near
+     * the target fill, absorbing the receiver's true ~11998.9 Hz vs our 12000. */
+    const double base_step = (double)s_src_rate / (double)OUT_RATE;
+    resamp_init(&s_rs, (double)s_src_rate, (double)OUT_RATE);
 
     /* Drift correction target: hold the jitter buffer near ~0.3s so latency is
-     * bounded and the tiny clock mismatch between our 48 kHz-derived consume
-     * rate and the receiver's true ~11998.9 Hz can't slowly fill or drain it.
-     * We consume one extra / one fewer source sample per block to nudge the
-     * effective playback rate by <1% (inaudible). */
+     * bounded and the clock mismatch can't slowly fill or drain it. */
     const size_t target = (size_t)(s_src_rate * 3 / 10); /* 0.3s of audio */
     const size_t margin = (size_t)(s_src_rate / 20);     /* 0.05s hysteresis */
 
-    vlog("audio_thread start: src_rate=%d out=%d base_need=%d target=%u",
-         s_src_rate, OUT_RATE, base_need, (unsigned)target);
-
-    int prev = 0;         /* last source sample of previous block (continuity) */
+    vlog("audio_thread start: src_rate=%d out=%d step=%.4f target=%u",
+         s_src_rate, OUT_RATE, base_step, (unsigned)target);
 
     /* Debug capture: dump the raw decoded 12 kHz mono PCM (straight from the
      * ADPCM decoder, before resampling/gain) for the first few seconds, so the
@@ -68,31 +69,46 @@ static int audio_thread(SceSize args, void *argp)
     vlog("audio capture %s", cap ? "open (ux0:data/vitasdr/audio_pcm.log)" : "FAILED");
 
     while (s_run) {
-        /* Adjust consumption toward the target fill level. */
+        /* Nudge the resample step toward the target fill level. */
         size_t avail = jitter_available(&s_app->jitter);
-        int need = base_need;
-        if (avail > target + margin && base_need + 1 <= OUT_GRAIN)
-            need = base_need + 1;   /* running long -> drain slightly faster */
-        else if (avail < target - margin && base_need - 1 >= 2)
-            need = base_need - 1;   /* running short -> drain slightly slower */
+        double step = base_step;
+        if (avail > target + margin)
+            step = base_step * 1.002;   /* running long -> drain slightly faster */
+        else if (avail < target - margin)
+            step = base_step * 0.998;   /* running short -> drain slightly slower */
+        resamp_set_step(&s_rs, step);
 
-        size_t got = jitter_pop(&s_app->jitter, src, (size_t)need);
-        if (got < (size_t)need) {
-            memset(src + got, 0, ((size_t)need - got) * sizeof(int16_t));
-            if (s_app->conn_status == CONN_CONNECTED && got == 0)
-                s_app->audio_underruns++;
-        }
-
-        /* Capture the raw decoded PCM (real samples only) to disk. */
-        if (cap && cap_left > 0 && got > 0) {
-            size_t w = (size_t)cap_left < got ? (size_t)cap_left : got;
-            b64_write(cap, src, (unsigned)(w * sizeof(int16_t)));
-            cap_left -= (long)w;
-            if (cap_left <= 0) {
-                b64_close(cap);
-                cap = NULL;
-                vlog("audio capture complete");
+        /* Produce one grain of resampled audio, pulling decoded PCM from the
+         * jitter buffer on demand. The resampler carries history across pushes,
+         * so there is no block-boundary discontinuity. */
+        int produced = 0;
+        while (produced < OUT_GRAIN) {
+            produced += resamp_pull(&s_rs, src + produced, OUT_GRAIN - produced);
+            if (produced >= OUT_GRAIN)
+                break;
+            int16_t raw[128];
+            size_t got = jitter_pop(&s_app->jitter, raw, sizeof(raw) / sizeof(raw[0]));
+            if (got == 0) {
+                /* Underrun: pad the rest of the grain with silence. */
+                memset(src + produced, 0,
+                       (size_t)(OUT_GRAIN - produced) * sizeof(int16_t));
+                if (s_app->conn_status == CONN_CONNECTED)
+                    s_app->audio_underruns++;
+                produced = OUT_GRAIN;
+                break;
             }
+            /* Capture the raw decoded PCM (before resampling) to disk. */
+            if (cap && cap_left > 0) {
+                size_t w = (size_t)cap_left < got ? (size_t)cap_left : got;
+                b64_write(cap, raw, (unsigned)(w * sizeof(int16_t)));
+                cap_left -= (long)w;
+                if (cap_left <= 0) {
+                    b64_close(cap);
+                    cap = NULL;
+                    vlog("audio capture complete");
+                }
+            }
+            resamp_push(&s_rs, raw, (int)got);
         }
 
         int vol = s_app->volume;
@@ -103,21 +119,8 @@ static int audio_thread(SceSize args, void *argp)
          * updating gain every ~10 ms modulated speech and sounded metallic. */
         int gain = vol * (AUDIO_GAIN * 256) / 100;
 
-        /* Upsample need -> OUT_GRAIN with LINEAR interpolation (not
-         * sample-and-hold, which imaged into 6-18 kHz and sounded metallic),
-         * mono -> stereo. The source sequence is [prev, src[0..need-1]] so
-         * blocks join without a discontinuity (which would buzz at the block
-         * rate). pos is 8.8 fixed point spanning the `need` intervals. */
-        float stepf = (float)need / (float)OUT_GRAIN;
-        float posf = 0.0f;
         for (int i = 0; i < OUT_GRAIN; i++) {
-            int i0 = (int)posf;
-            float fr = posf - (float)i0;
-            posf += stepf;
-            int a = (i0 <= 0) ? prev : (int)src[i0 - 1]; /* value at index i0 */
-            int b = (i0 < need) ? (int)src[i0] : (int)src[need - 1]; /* i0+1 */
-            int interp = a + (int)((float)(b - a) * fr);
-            int s = (interp * gain) >> 8;
+            int s = ((int)src[i] * gain) >> 8;
             /* Soft limiter: above the knee, compress the excess 4:1 rather than
              * hard-clipping (which sounds harsh / like it cuts out). */
             if (s > SOFT_KNEE)
@@ -129,7 +132,6 @@ static int audio_thread(SceSize args, void *argp)
             out[i * 2]     = (int16_t)s;
             out[i * 2 + 1] = (int16_t)s;
         }
-        prev = (int)src[need - 1];  /* carry for the next block's first sample */
 
         sceAudioOutOutput(s_port, out);
 
