@@ -34,7 +34,9 @@ set(CORE_SOURCES
     src/core/ws_client.c
     src/core/kiwi.c
     src/core/bandplan.c
-    src/core/resamp.c)
+    src/core/resamp.c
+    src/core/httpget.c
+    src/core/kiwidir.c)
 
 if(VITA)
   ## ---------------- Vita VPK build ----------------

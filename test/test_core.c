@@ -8,6 +8,7 @@
 #include "bandplan.h"
 #include "jitter.h"
 #include "kiwi.h"
+#include "kiwidir.h"
 #include "net.h"
 #include "resamp.h"
 #include "ws_client.h"
@@ -434,6 +435,71 @@ static void test_resamp(void)
           "resamp passes 1 kHz tone with amplitude intact");
 }
 
+/* -------------------- KiwiSDR directory parser -------------------- */
+
+static const char *DIR_SAMPLE =
+    "// KiwiSDR.com receiver list for dyatlov map maker\n"
+    "// data timestamp: Tue, 29-Sep-2026 17:09:32 GMT (has : colons)\n"
+    "var kiwisdr_com =\n"
+    "[\n"
+    "\t{\n"
+    "\t\t\"name\":\"SA4BNA 0-32 MHZ, Arvika\",\n"
+    "\t\t\"users\":\"2\",\n"
+    "\t\t\"users_max\":\"8\",\n"
+    "\t\t\"snr\":\"44,45\",\n"
+    "\t\t\"loc\":\"Glava\",\n"
+    "\t\t\"status\":\"active\",\n"
+    "\t\t\"offline\":\"no\",\n"
+    "\t\t\"url\":\"http://sa4bna.hopto.org:8073\"\n"
+    "\t},\n"
+    "\t{\n"
+    "\t\t\"name\":\"Offline One\",\n"
+    "\t\t\"snr\":\"\",\n"
+    "\t\t\"status\":\"active\",\n"
+    "\t\t\"offline\":\"yes\",\n"
+    "\t\t\"url\":\"http://dead.example.net:8074\"\n"
+    "\t},\n"
+    "\t{\n"
+    "\t\t\"name\":\"No Port Kiwi\",\n"
+    "\t\t\"snr\":\"30,31\",\n"
+    "\t\t\"status\":\"inactive\",\n"
+    "\t\t\"offline\":\"no\",\n"
+    "\t\t\"url\":\"http://barehost.example.org\"\n"
+    "\t}\n"
+    "]\n;\n";
+
+static void test_kiwidir(void)
+{
+    printf("[kiwidir]\n");
+    kiwi_server arr[8];
+    kiwidir_parser p;
+    kiwidir_init(&p, arr, 8);
+
+    /* Feed in small odd-sized chunks to exercise chunk-boundary handling. */
+    size_t total = strlen(DIR_SAMPLE);
+    for (size_t off = 0; off < total; off += 7) {
+        size_t n = (total - off < 7) ? total - off : 7;
+        kiwidir_feed(&p, DIR_SAMPLE + off, n);
+    }
+    CHECK(kiwidir_count(&p) == 3, "parsed 3 receivers");
+
+    CHECK(strcmp(arr[0].host, "sa4bna.hopto.org") == 0, "rec0 host");
+    CHECK(arr[0].port == 8073, "rec0 port");
+    CHECK(strcmp(arr[0].name, "SA4BNA 0-32 MHZ, Arvika") == 0, "rec0 name");
+    CHECK(arr[0].users == 2 && arr[0].users_max == 8, "rec0 users");
+    CHECK(arr[0].snr == 44, "rec0 snr first value");
+    CHECK(arr[0].online == 1, "rec0 online");
+
+    CHECK(strcmp(arr[1].host, "dead.example.net") == 0 && arr[1].port == 8074,
+          "rec1 host:port");
+    CHECK(arr[1].online == 0, "rec1 offline flagged");
+    CHECK(arr[1].snr == -1, "rec1 empty snr -> -1");
+
+    CHECK(strcmp(arr[2].host, "barehost.example.org") == 0, "rec2 host");
+    CHECK(arr[2].port == 8073, "rec2 default port when url has none");
+    CHECK(arr[2].online == 0, "rec2 inactive status -> offline");
+}
+
 int main(void)
 {
     printf("VitaSDR core tests\n==================\n");
@@ -442,6 +508,7 @@ int main(void)
     test_kiwi_parse();
     test_bandplan();
     test_resamp();
+    test_kiwidir();
     test_websocket_loopback();
     test_websocket_recv_timeout();
     printf("==================\n%d passed, %d failed\n", g_pass, g_fail);
