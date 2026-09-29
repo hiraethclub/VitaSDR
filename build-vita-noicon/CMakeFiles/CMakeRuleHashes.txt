@@ -1,0 +1,7 @@
+# Hashes of file build rules.
+97b5b2741da7d6fcfa183125a6614e4b CMakeFiles/VitaSDR-velf
+114d30a171fa388a899f6571955b48b7 CMakeFiles/VitaSDR.self-self
+bdbd4fa7c0083c6aa70e6c42d0a8612e CMakeFiles/VitaSDR.vpk-vpk
+079864f9967a42fe5d49364276874d12 VitaSDR.self.out
+1f05cc5d9a0baa0071bb77545bbc5870 VitaSDR.vpk.out
+34848c7f0abf86fdca3ea9b5b5ea2d17 VitaSDR.vpk_param.sfo

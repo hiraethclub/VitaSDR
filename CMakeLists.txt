@@ -87,12 +87,26 @@ if(VITA)
       m)
 
   vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME} UNSAFE)
-  ## NOTE: a custom sce_sys/icon0.png made VitaShell reject the package
-  ## (install error 0x80113D...), so we ship with the default bubble for now.
-  ## Revisit with a correctly-formatted icon later.
-  vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
-      VERSION ${VITA_VERSION}
-      NAME ${VITA_APP_NAME})
+
+  ## Custom LiveArea assets (icon bubble + background + startup image). An
+  ## earlier build shipped a malformed icon0.png that VitaShell rejected
+  ## (install error 0x80113D); these are freshly generated as valid 128x128
+  ## RGBA / 840x500 / 280x158 non-interlaced PNGs. Toggle off to fall back to
+  ## the default bubble: -DVITASDR_LIVEAREA=OFF
+  option(VITASDR_LIVEAREA "Bundle custom icon/LiveArea assets" ON)
+  if(VITASDR_LIVEAREA)
+    vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
+        VERSION ${VITA_VERSION}
+        NAME ${VITA_APP_NAME}
+        FILE sce_sys/icon0.png sce_sys/icon0.png
+        FILE sce_sys/livearea/contents/bg0.png sce_sys/livearea/contents/bg0.png
+        FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
+        FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
+  else()
+    vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
+        VERSION ${VITA_VERSION}
+        NAME ${VITA_APP_NAME})
+  endif()
 
 else()
   ## ---------------- Native test build ----------------

@@ -1,0 +1,55 @@
+CMakeFiles/VitaSDR.dir/src/vita/waterfall.c.obj: \
+ /home/user/VitaSDR/src/vita/waterfall.c \
+ /home/user/VitaSDR/src/vita/app.h /home/user/VitaSDR/src/core/jitter.h \
+ /usr/local/vitasdk/lib/gcc/arm-vita-eabi/15.2.0/include/stddef.h \
+ /usr/local/vitasdk/lib/gcc/arm-vita-eabi/15.2.0/include/stdint.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/stdint.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/machine/_default_types.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/features.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/_newlib_version.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/bits/posix_opt.h \
+ /usr/local/vitasdk/lib/gcc/arm-vita-eabi/15.2.0/include/limits.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/_intsup.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/_stdint.h \
+ /home/user/VitaSDR/src/core/kiwi.h /home/user/VitaSDR/src/core/adpcm.h \
+ /home/user/VitaSDR/src/core/jitter.h \
+ /home/user/VitaSDR/src/core/ws_client.h \
+ /home/user/VitaSDR/src/core/kiwidir.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/vitasdk/build_utils.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/callback.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/types.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2common/types.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2common/kernel/threadmgr.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/cond.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/eventflag.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/lw_cond.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/lw_mutex.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/msgpipe.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/mutex.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/rwlock.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/semaphore.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/signal.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/thread.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/cpu.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/threadmgr/vfp.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/vita2d.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/gxm.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/kernel/sysmem.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2common/kernel/sysmem.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/pgf.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/psp2/pvf.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/string.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/_ansi.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/newlib.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/config.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/machine/ieeefp.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/reent.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/_ansi.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/_types.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/machine/_types.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/lock.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/cdefs.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/_locale.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/strings.h \
+ /usr/local/vitasdk/arm-vita-eabi/include/sys/string.h

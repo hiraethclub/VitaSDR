@@ -1,0 +1,6 @@
+/home/user/VitaSDR/build-vita-noicon/CMakeFiles/VitaSDR.dir
+/home/user/VitaSDR/build-vita-noicon/CMakeFiles/VitaSDR-velf.dir
+/home/user/VitaSDR/build-vita-noicon/CMakeFiles/VitaSDR.self-self.dir
+/home/user/VitaSDR/build-vita-noicon/CMakeFiles/VitaSDR.vpk-vpk.dir
+/home/user/VitaSDR/build-vita-noicon/CMakeFiles/edit_cache.dir
+/home/user/VitaSDR/build-vita-noicon/CMakeFiles/rebuild_cache.dir
