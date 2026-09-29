@@ -56,7 +56,14 @@ static int audio_thread(SceSize args, void *argp)
      * correction nudges this by <1% (inaudible) to keep the jitter buffer near
      * the target fill, absorbing the receiver's true ~11998.9 Hz vs our 12000. */
     const double base_step = (double)s_src_rate / (double)OUT_RATE;
-    resamp_init(&s_rs, (double)s_src_rate, (double)OUT_RATE, AUDIO_LP_HZ);
+    /* Audio bandwidth preset -> low-pass corner (Hz). */
+    double lp_hz = AUDIO_LP_HZ;
+    switch (s_app->audio_bw) {
+    case AUDIO_BW_NARROW: lp_hz = 3000.0; break;
+    case AUDIO_BW_WIDE:   lp_hz = 6000.0; break;
+    default:              lp_hz = AUDIO_LP_HZ; break;   /* normal */
+    }
+    resamp_init(&s_rs, (double)s_src_rate, (double)OUT_RATE, lp_hz);
 
     /* DC blocker state: AM demodulation and IMA-ADPCM both leave a slowly
      * wandering DC offset that eats headroom and biases the limiter. A single-

@@ -162,6 +162,11 @@ int net_thread(SceSize args, void *argp)
                 hex[0] = '\0';
             vlog("first %u bytes: %s | %s", nf, hex, asc);
             net_disconnect(&k, &connected, 1);
+            if (g_app.auto_reconnect && g_app.host[0]) {
+                sceKernelDelayThread(3000 * 1000);   /* back off, then retry */
+                if (g_app.running && !g_app.cmd_disconnect)
+                    g_app.cmd_connect = 1;
+            }
             continue;
         }
         if (r == KIWI_AUDIO) {
@@ -234,7 +239,8 @@ int wf_thread(SceSize args, void *argp)
             int zoom = g_app.zoom;
             sceKernelUnlockMutex(g_app.lock, 1);
             int wrc = kiwi_wf_connect(&w, g_app.host, g_app.port,
-                                      g_app.password, f, zoom, 6000);
+                                      g_app.password, f, zoom,
+                                      g_app.wf_speed, 6000);
             vlog("wf_connect rc=%d", wrc);
             if (wrc == 0) {
                 wf_conn = 1;
@@ -290,6 +296,32 @@ int wf_thread(SceSize args, void *argp)
     return 0;
 }
 
+/* ---------------- directory fetch thread ---------------- */
+
+int dir_thread(SceSize args, void *argp)
+{
+    (void)args; (void)argp;
+    while (g_app.running) {
+        if (g_app.cmd_fetch_dir) {
+            g_app.cmd_fetch_dir = 0;
+            g_app.dir_status = DIR_FETCHING;
+            vlog("directory fetch start");
+            int n = servers_fetch();
+            if (n > 0) {
+                g_app.dir_status = DIR_DONE;
+                if (g_app.sel >= n) g_app.sel = 0;
+                vlog("directory fetch OK: %d receivers", n);
+            } else {
+                g_app.dir_status = DIR_ERROR;
+                vlog("directory fetch FAILED rc=%d", n);
+            }
+        } else {
+            sceKernelDelayThread(50 * 1000);
+        }
+    }
+    return 0;
+}
+
 /* ---------------- main ---------------- */
 
 int main(int argc, char *argv[])
@@ -329,27 +361,40 @@ int main(int argc, char *argv[])
     vita2d_set_clear_color(RGBA8(10, 12, 16, 255));
     wf_render_init();
     input_init();
+    menu_init();
 
     SceUID net_tid = sceKernelCreateThread("vitasdr_net", net_thread,
                                            0x10000100, 0x40000, 0, 0, NULL);
     SceUID wf_tid = sceKernelCreateThread("vitasdr_wf", wf_thread,
                                           0x10000100, 0x40000, 0, 0, NULL);
+    SceUID dir_tid = sceKernelCreateThread("vitasdr_dir", dir_thread,
+                                           0x10000100, 0x40000, 0, 0, NULL);
     sceKernelStartThread(net_tid, 0, NULL);
     sceKernelStartThread(wf_tid, 0, NULL);
+    sceKernelStartThread(dir_tid, 0, NULL);
 
-    /* Auto-connect on launch if the network is up and a host is configured
-     * (config_load guarantees a real default). */
-    if (net_ok && g_app.host[0]) {
+    if (!net_ok) {
+        g_app.screen = SCREEN_SERVERS;
+        ui_show_message(&g_app, "no network - check WiFi");
+    } else if (g_app.auto_connect && g_app.host[0]) {
+        /* Skip the picker and reconnect to the last-used receiver. */
+        g_app.screen = SCREEN_RADIO;
         g_app.cmd_connect = 1;
         ui_show_message(&g_app, g_app.host);
-    } else if (!net_ok) {
-        ui_show_message(&g_app, "no network - check WiFi");
     } else {
-        ui_show_message(&g_app, "Set host in ux0:data/vitasdr/config.ini");
+        /* Show the directory picker and start fetching the list. */
+        g_app.screen = SCREEN_SERVERS;
+        g_app.cmd_fetch_dir = 1;
     }
 
     while (g_app.running) {
         input_poll(&g_app);
+
+        /* Keep the screen/system awake while running, if enabled, so listening
+         * to a station isn't cut short by the Vita auto-dimming/suspending. */
+        if (g_app.keep_awake)
+            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND |
+                               SCE_KERNEL_POWER_TICK_DISABLE_OLED_OFF);
 
         /* Note: we deliberately do NOT reset the waterfall contrast on retune.
          * The percentile floor eases to the new band within ~1s, and resetting
@@ -362,7 +407,10 @@ int main(int argc, char *argv[])
 
         vita2d_start_drawing();
         vita2d_clear_screen();
-        ui_draw(&g_app);
+        if (g_app.screen == SCREEN_RADIO)
+            ui_draw(&g_app);
+        else
+            menu_draw(&g_app);
         vita2d_end_drawing();
         vita2d_swap_buffers();
     }
@@ -370,8 +418,10 @@ int main(int argc, char *argv[])
     /* Shut down. */
     sceKernelWaitThreadEnd(net_tid, NULL, NULL);
     sceKernelWaitThreadEnd(wf_tid, NULL, NULL);
+    sceKernelWaitThreadEnd(dir_tid, NULL, NULL);
     sceKernelDeleteThread(net_tid);
     sceKernelDeleteThread(wf_tid);
+    sceKernelDeleteThread(dir_tid);
 
     config_save(&g_app);
     wf_render_shutdown();

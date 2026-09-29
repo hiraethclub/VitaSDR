@@ -118,6 +118,7 @@ typedef struct {
     int       configured;
     double    freq_khz;   /* center frequency */
     int       zoom;       /* 0..14; span = ~30 MHz / 2^zoom */
+    int       wf_speed;   /* 1..4 update rate; 0 -> default (4) */
     unsigned  seq;
 } kiwi_wf;
 
@@ -125,7 +126,7 @@ typedef struct {
  * zoom. Returns 0 on success, <0 on failure. */
 int kiwi_wf_connect(kiwi_wf *w, const char *host, int port,
                     const char *password, double freq_khz, int zoom,
-                    int timeout_ms);
+                    int wf_speed, int timeout_ms);
 
 /* Process one incoming frame. On a W/F frame, copies up to max_bins power
  * bytes into `bins` and returns the count (>0). Returns 0 for idle/other/

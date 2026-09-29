@@ -46,6 +46,13 @@ void config_defaults(app_state *app)
     app->squelch = 0;
     app->palette = 0;
     app->show_spectrum = 1;
+
+    /* QoL settings */
+    app->wf_speed = 4;
+    app->audio_bw = AUDIO_BW_NORMAL;
+    app->auto_connect = 0;    /* default: show the server picker on launch */
+    app->auto_reconnect = 1;
+    app->keep_awake = 1;
 }
 
 static void ensure_dir(void)
@@ -74,9 +81,16 @@ int config_save(const app_state *app)
         "zoom=%d\n"
         "volume=%d\n"
         "squelch=%d\n"
-        "palette=%d\n",
+        "palette=%d\n"
+        "wf_speed=%d\n"
+        "audio_bw=%d\n"
+        "auto_connect=%d\n"
+        "auto_reconnect=%d\n"
+        "keep_awake=%d\n",
         app->host, app->port, app->password, app->freq_khz, app->mode,
-        app->step_hz, app->zoom, app->volume, app->squelch, app->palette);
+        app->step_hz, app->zoom, app->volume, app->squelch, app->palette,
+        app->wf_speed, app->audio_bw, app->auto_connect, app->auto_reconnect,
+        app->keep_awake);
     fclose(f);
     return 0;
 }
@@ -132,6 +146,16 @@ int config_load(app_state *app)
             app->squelch = atoi(val);
         else if (strcmp(key, "palette") == 0)
             app->palette = atoi(val);
+        else if (strcmp(key, "wf_speed") == 0)
+            app->wf_speed = atoi(val);
+        else if (strcmp(key, "audio_bw") == 0)
+            app->audio_bw = atoi(val);
+        else if (strcmp(key, "auto_connect") == 0)
+            app->auto_connect = atoi(val);
+        else if (strcmp(key, "auto_reconnect") == 0)
+            app->auto_reconnect = atoi(val);
+        else if (strcmp(key, "keep_awake") == 0)
+            app->keep_awake = atoi(val);
     }
     fclose(f);
 

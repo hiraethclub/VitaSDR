@@ -9,7 +9,8 @@
  *   L + R together   cycle demodulation mode
  *   Start            connect / disconnect
  *   Select           toggle spectrum
- *   Circle           exit
+ *   Triangle         open settings
+ *   Circle           open the server picker (PS button quits the app)
  * All tuning snaps to the current step grid so it lands on clean frequencies.
  */
 #include "app.h"
@@ -78,6 +79,14 @@ void input_poll(app_state *app)
     sceCtrlPeekBufferPositive(0, &pad, 1);
     unsigned int b = pad.buttons;
     unsigned int pressed = b & ~s_prev; /* rising edges */
+
+    /* On the picker/settings screens, hand button edges to the menu and skip
+     * all radio controls (including the analog sticks). */
+    if (app->screen != SCREEN_RADIO) {
+        menu_handle(app, pressed);
+        s_prev = b;
+        return;
+    }
 
     /* Deadzones: generous, because Vita analog sticks rest off-centre. */
     const int dead = 40;    /* left stick (tuning sweep) */
@@ -164,9 +173,14 @@ void input_poll(app_state *app)
     if (pressed & SCE_CTRL_SELECT)
         app->show_spectrum = !app->show_spectrum;
 
-    /* ---- Circle: exit ---- */
+    /* ---- Triangle: open settings ---- */
+    if (pressed & SCE_CTRL_TRIANGLE)
+        app->screen = SCREEN_SETTINGS;
+
+    /* ---- Circle: open the server picker (does NOT quit; use the PS button
+     * to exit, so a stray press can't drop the app). ---- */
     if (pressed & SCE_CTRL_CIRCLE)
-        app->running = 0;
+        app->screen = SCREEN_SERVERS;
 
     s_prev = b;
 }

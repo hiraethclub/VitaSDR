@@ -16,6 +16,7 @@
 
 #include "jitter.h"
 #include "kiwi.h"
+#include "kiwidir.h"
 
 #include <psp2/kernel/threadmgr.h>
 
@@ -29,6 +30,24 @@ enum {
     CONN_CONNECTED,
     CONN_ERROR
 };
+
+/* Which screen the UI is showing. */
+enum {
+    SCREEN_SERVERS = 0,   /* directory picker (startup) */
+    SCREEN_RADIO,         /* the radio client */
+    SCREEN_SETTINGS       /* settings + credits */
+};
+
+/* Directory fetch state. */
+enum {
+    DIR_IDLE = 0,
+    DIR_FETCHING,
+    DIR_DONE,
+    DIR_ERROR
+};
+
+/* Audio bandwidth presets (low-pass corner). */
+enum { AUDIO_BW_NARROW = 0, AUDIO_BW_NORMAL, AUDIO_BW_WIDE };
 
 typedef struct {
     /* ---- server config ---- */
@@ -45,6 +64,19 @@ typedef struct {
     int    squelch;      /* 0..100 (display only for now) */
     int    palette;      /* waterfall palette index */
     int    show_spectrum;
+
+    /* ---- QoL settings (persisted) ---- */
+    int    wf_speed;      /* waterfall update rate 1..4 */
+    int    audio_bw;      /* AUDIO_BW_* low-pass preset */
+    int    auto_connect;  /* skip picker, connect to last server on launch */
+    int    auto_reconnect;/* reconnect automatically on a dropped link */
+    int    keep_awake;    /* hold off Vita auto-dim/suspend while running */
+
+    /* ---- screen / directory (main-thread owns screen, sel) ---- */
+    volatile int screen;
+    volatile int dir_status;
+    volatile int cmd_fetch_dir;
+    int    sel;           /* selected row in the server picker */
 
     /* ---- command handoff main -> worker threads (under lock) ---- */
     SceUID lock;
@@ -95,6 +127,15 @@ unsigned char wf_level(unsigned char v); /* noise-floor + gain applied to a bin 
 void ui_draw(app_state *app);
 void ui_show_message(app_state *app, const char *msg);
 
+/* menu.c — server picker + settings screens */
+void menu_init(void);
+int  servers_fetch(void);              /* net thread: fetch+parse; returns count/<0 */
+int  servers_count(void);
+const kiwi_server *servers_at(int i);
+void menu_draw(app_state *app);        /* draws picker or settings by app->screen */
+void menu_handle(app_state *app, unsigned int pressed); /* button edges */
+const char *ime_get_text(const char *title, const char *initial); /* on-screen kbd */
+
 /* input.c */
 void input_init(void);
 void input_poll(app_state *app);
@@ -102,5 +143,6 @@ void input_poll(app_state *app);
 /* net threads (main.c starts them) */
 int  net_thread(SceSize args, void *argp);
 int  wf_thread(SceSize args, void *argp);
+int  dir_thread(SceSize args, void *argp);  /* directory fetch worker */
 
 #endif /* VITASDR_APP_H */
