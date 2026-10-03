@@ -56,43 +56,44 @@ HENkaku/enso Vita.
 
 ## First run
 
-On first launch VitaSDR writes a default `ux0:data/vitasdr/config.ini` with a
-placeholder host and shows a reminder. Edit that file (in VitaShell) to point
-at your receiver:
-
-```ini
-host=your-kiwi.example.com
-port=8073
-password=
-freq_khz=7074.000
-mode=usb
-```
-
-Relaunch; it auto-connects when a real host is configured. Press **Start** to
-connect/disconnect manually.
+On launch VitaSDR fetches the live public KiwiSDR directory and shows a
+**server picker**. Choose one (free receivers are listed first) and press **X**
+to connect. Star receivers you like with **Start**, or add one by hand (e.g.
+your own) with **Select** and the on-screen keyboard. Settings and favourites
+are saved under `ux0:data/vitasdr/`; you can still edit `config.ini` directly if
+you prefer. Turn on "auto-connect" in Settings to skip the picker and reconnect
+to the last receiver on launch.
 
 ## Controls
+
+Radio screen:
 
 | Input            | Action                                              |
 |------------------|-----------------------------------------------------|
 | D-pad L/R        | Tune down/up by one step (hold to repeat)           |
 | D-pad U/D        | Change tuning step (1 Hz … 100 kHz)                 |
 | Left stick L/R   | Sweep tuning (rate scales with how far you push)    |
-| Right stick L/R  | Volume                                              |
-| Right stick U/D  | Squelch                                             |
-| L + R together   | Cycle mode (USB/LSB/AM/CW/NBFM)                     |
+| Right stick      | Volume (L/R) or Squelch (U/D) — dominant axis only  |
+| L + R together   | Cycle mode (USB/LSB/AM/CW/FM)                       |
 | Start            | Connect / disconnect                                |
 | Select           | Toggle spectrum                                     |
-| Circle           | Exit                                                |
+| Square           | Open the band-jump selector                         |
+| Triangle         | Open Settings                                       |
+| Circle           | Open the server picker (PS button exits the app)    |
+
+Server picker: **X** connect · **Start** toggle favourite · **Select** add by
+hand · **Square** refresh directory · **Triangle** Settings. Band selector:
+Up/Down choose (hold to scroll, L/R skip 5), **X** jump, **Circle** back.
 
 ## Testing status
 
-Verified on the host by `vitasdr_test` (55 assertions):
+Verified on the host by `vitasdr_test` (68 assertions):
 
 - IMA-ADPCM decode against a hand-traced vector
 - jitter buffer FIFO order and drop-oldest overflow
 - KiwiSDR `SND`, `MSG`, and `W/F` frame parsing, and band-plan lookup
 - windowed-sinc resampler: image suppression, unity DC and mid-band gain
+- plain-HTTP GET client and the KiwiSDR directory parser (chunk-split safe)
 - full RFC 6455 handshake (with `Sec-WebSocket-Accept` verification) and
   binary frame round-trip against a loopback server, including auto ping/pong
   and the recv-timeout path that once misaligned the frame stream
@@ -107,10 +108,12 @@ Verified on real hardware (PS Vita PCH-1000):
 
 Known rough edges (not blocking, next on the list):
 
-- volume/clipping behaviour at high gain could be gentler
+- some public receivers allow only one connection per IP, so you get audio but
+  no waterfall; the UI labels this ("Audio only")
 - verbose diagnostics and audio captures still write to `ux0:data/vitasdr/`
-- `wf_comp=0` (uncompressed bins) only; the compressed-waterfall path and
-  OpenWebRX are not yet implemented
+- `wf_comp=0` (uncompressed bins) only
+- OpenWebRX not yet implemented (protocol researched; VHF bands like FM are in
+  the band list ready for it + a VHF-capable receiver)
 
 ## License
 
