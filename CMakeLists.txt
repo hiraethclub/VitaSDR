@@ -42,8 +42,37 @@ if(VITA)
   ## ---------------- Vita VPK build ----------------
   include("${VITASDK}/share/vita.cmake" REQUIRED)
 
-  set(VITA_APP_NAME "VitaSDR")
-  set(VITA_TITLEID  "VSDR00001")
+  ## Build revision from git (commit count + short hash), used in the app name,
+  ## log filename and VPK filename so builds are tellable apart.
+  execute_process(COMMAND git rev-list --count HEAD
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      OUTPUT_VARIABLE GIT_COUNT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  execute_process(COMMAND git rev-parse --short HEAD
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      OUTPUT_VARIABLE GIT_HASH OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(NOT GIT_COUNT)
+    set(GIT_COUNT 0)
+  endif()
+  if(NOT GIT_HASH)
+    set(GIT_HASH "nogit")
+  endif()
+  set(BUILD_REV "${GIT_COUNT}-g${GIT_HASH}")
+
+  ## VITASDR_DEV builds a SEPARATE app (distinct TITLEID, name, data dir, VPK
+  ## name) so it installs alongside the stable VitaSDR without clashing.
+  ## -DVITASDR_DEV=OFF produces the stable identity.
+  option(VITASDR_DEV "Build the separate dev app" ON)
+  if(VITASDR_DEV)
+    set(VITA_APP_NAME "VitaSDR Dev r${GIT_COUNT}")
+    set(VITA_TITLEID  "VSDR00002")
+    set(APP_DATA_DIR  "ux0:data/vitasdr-dev")
+    set(VPK_FILE      "VitaSDR-dev-r${BUILD_REV}.vpk")
+  else()
+    set(VITA_APP_NAME "VitaSDR")
+    set(VITA_TITLEID  "VSDR00001")
+    set(APP_DATA_DIR  "ux0:data/vitasdr")
+    set(VPK_FILE      "VitaSDR.vpk")
+  endif()
   set(VITA_VERSION  "01.00")
 
   add_compile_options(-Wall -Wextra -O2 -fno-lto)
@@ -62,6 +91,11 @@ if(VITA)
       src/vita/main.c)
 
   target_include_directories(${PROJECT_NAME} PRIVATE src/core)
+
+  target_compile_definitions(${PROJECT_NAME} PRIVATE
+      VITASDR_DATA_DIR="${APP_DATA_DIR}"
+      VITASDR_BUILD_REV="${BUILD_REV}"
+      VITASDR_APP_LABEL="${VITA_APP_NAME}")
 
   target_link_libraries(${PROJECT_NAME}
       vita2d
@@ -95,7 +129,7 @@ if(VITA)
   ## the default bubble: -DVITASDR_LIVEAREA=OFF
   option(VITASDR_LIVEAREA "Bundle custom icon/LiveArea assets" ON)
   if(VITASDR_LIVEAREA)
-    vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
+    vita_create_vpk(${VPK_FILE} ${VITA_TITLEID} ${PROJECT_NAME}.self
         VERSION ${VITA_VERSION}
         NAME ${VITA_APP_NAME}
         FILE sce_sys/icon0.png sce_sys/icon0.png
@@ -103,7 +137,7 @@ if(VITA)
         FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
         FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
   else()
-    vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
+    vita_create_vpk(${VPK_FILE} ${VITA_TITLEID} ${PROJECT_NAME}.self
         VERSION ${VITA_VERSION}
         NAME ${VITA_APP_NAME})
   endif()

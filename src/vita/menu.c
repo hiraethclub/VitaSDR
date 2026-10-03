@@ -7,6 +7,7 @@
 #include "app.h"
 #include "httpget.h"
 #include "kiwidir.h"
+#include "build_info.h"
 
 #include <psp2/ctrl.h>
 #include <psp2/ime_dialog.h>
@@ -339,7 +340,8 @@ static void draw_settings(app_state *app)
     int cy = SCREEN_H - 92;
     vita2d_draw_rectangle(0, cy - 6, SCREEN_W, 92, COL_BAR);
     vita2d_pgf_draw_textf(s_font, 20, cy + 16, COL_TEXT, 0.9f,
-                          "VitaSDR  -  by Aisling de Gr\xC3\xA1s");
+                          "%s (r%s)  -  by Aisling de Gr\xC3\xA1s",
+                          VITASDR_APP_LABEL, VITASDR_BUILD_REV);
     vita2d_pgf_draw_textf(s_font, 20, cy + 40, COL_DIM, 0.85f,
                           "aisling@hiraeth.club");
     vita2d_pgf_draw_textf(s_font, 20, cy + 62, COL_DIM, 0.85f,

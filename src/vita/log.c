@@ -1,5 +1,6 @@
 /* Tiny file logger. See log.h. */
 #include "log.h"
+#include "build_info.h"
 
 #include <psp2/io/dirent.h>
 #include <psp2/io/stat.h>
@@ -13,10 +14,13 @@ static FILE *s_log = NULL;
 void log_init(void)
 {
     sceIoMkdir("ux0:data", 0777);
-    sceIoMkdir("ux0:data/vitasdr", 0777);
-    s_log = fopen("ux0:data/vitasdr/vitasdr.log", "w");
+    sceIoMkdir(VITASDR_DATA_DIR, 0777);
+    /* Log filename carries the build revision so logs from different builds
+     * (e.g. the stable app and this dev app) don't overwrite each other. */
+    s_log = fopen(VITASDR_DATA_DIR "/vitasdr-r" VITASDR_BUILD_REV ".log", "w");
     if (s_log) {
-        fputs("=== VitaSDR log ===\n", s_log);
+        fputs("=== " VITASDR_APP_LABEL " (r" VITASDR_BUILD_REV ") log ===\n",
+              s_log);
         fflush(s_log);
     }
 }

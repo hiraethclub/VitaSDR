@@ -4,6 +4,7 @@
  * file are created so the user can edit in the server details from VitaShell.
  */
 #include "app.h"
+#include "build_info.h"
 
 #include <psp2/io/dirent.h>
 #include <psp2/io/stat.h>
@@ -12,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define CFG_DIR  "ux0:data/vitasdr"
+#define CFG_DIR  VITASDR_DATA_DIR
 #define CFG_FILE CFG_DIR "/config.ini"
 
 /* A live public KiwiSDR used as the out-of-the-box default so the app connects

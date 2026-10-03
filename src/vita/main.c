@@ -11,6 +11,7 @@
 #include "net.h"
 #include "log.h"
 #include "b64.h"
+#include "build_info.h"
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -249,7 +250,7 @@ int wf_thread(SceSize args, void *argp)
     static kiwi_wf w;
     int wf_conn = 0;
     double last_freq = 0;
-    uint64_t last_ka = 0, last_center = 0, wf_start = 0;
+    uint64_t last_ka = 0, last_center = 0, wf_start = 0, last_wf_stat = 0;
     unsigned long wf_frames = 0;
     static unsigned char bins[KIWI_WF_BINS];
 
@@ -262,11 +263,11 @@ int wf_thread(SceSize args, void *argp)
             int wrc = kiwi_wf_connect(&w, g_app.host, g_app.port,
                                       g_app.password, f, zoom,
                                       g_app.wf_speed, 6000);
-            vlog("wf_connect rc=%d", wrc);
+            vlog("wf_connect rc=%d resp='%s'", wrc, w.ws.dbg_resp);
             if (wrc == 0) {
                 wf_conn = 1;
                 last_freq = f;
-                last_ka = last_center = wf_start = now_ms();
+                last_ka = last_center = wf_start = last_wf_stat = now_ms();
                 wf_frames = 0;
             } else {
                 sceKernelDelayThread(500 * 1000);
@@ -292,6 +293,14 @@ int wf_thread(SceSize args, void *argp)
                     vlog("wf frames=%lu (nb=%d)", wf_frames, nb);
             }
             uint64_t t = now_ms();
+            /* Periodic WF receive diagnostics (even when no frames parse), so we
+             * can tell 'server sends nothing' from 'frames arrive but drop'. */
+            if (t - last_wf_stat >= 2000) {
+                last_wf_stat = t;
+                vlog("wf stat: frames=%lu rx=%u inlen=%u net=%d last_nb=%d",
+                     wf_frames, w.ws.dbg_rx_bytes, (unsigned)w.ws.in_len,
+                     w.ws.dbg_net_result, nb);
+            }
             if (t - last_center >= 200) {
                 sceKernelLockMutex(g_app.lock, 1, NULL);
                 double f = g_app.freq_khz;
@@ -365,7 +374,7 @@ int main(int argc, char *argv[])
     g_app.lock = sceKernelCreateMutex("vitasdr_lock", 0, 0, NULL);
 
     /* Install the ADPCM debug capture (first ~6s of compressed payload). */
-    s_adpcm_open = (b64_open(&s_adpcm_cap, "ux0:data/vitasdr/adpcm.log") == 0);
+    s_adpcm_open = (b64_open(&s_adpcm_cap, VITASDR_DATA_DIR "/adpcm.log") == 0);
     s_adpcm_left = 12000 / 2 * 6;   /* ~6s of ADPCM (2 samples/byte @ 12kHz) */
     kiwi_snd_tap = adpcm_capture;
     vlog("adpcm capture %s", s_adpcm_open ? "open" : "FAILED");

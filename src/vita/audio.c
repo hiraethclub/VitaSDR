@@ -14,6 +14,7 @@
 #include "log.h"
 #include "b64.h"
 #include "resamp.h"
+#include "build_info.h"
 
 #include <psp2/audioout.h>
 #include <psp2/kernel/threadmgr.h>
@@ -84,10 +85,10 @@ static int audio_thread(SceSize args, void *argp)
      * (as text) so it can be attached in clients that reject binary files;
      * decode with `base64 -d audio_pcm.log > audio.raw`. */
     b64_enc capb;
-    int cap_ok = (b64_open(&capb, "ux0:data/vitasdr/audio_pcm.log") == 0);
+    int cap_ok = (b64_open(&capb, VITASDR_DATA_DIR "/audio_pcm.log") == 0);
     b64_enc *cap = cap_ok ? &capb : NULL;
     long cap_left = (long)s_src_rate * 6; /* ~6 seconds */
-    vlog("audio capture %s", cap ? "open (ux0:data/vitasdr/audio_pcm.log)" : "FAILED");
+    vlog("audio capture %s", cap ? "open (" VITASDR_DATA_DIR "/audio_pcm.log)" : "FAILED");
 
     while (s_run) {
         /* Nudge the resample step toward the target fill level. */
@@ -181,6 +182,11 @@ static int audio_thread(SceSize args, void *argp)
 
 int audio_start(app_state *app)
 {
+    /* Defensively release any port/thread left from a previous session so
+     * reconnecting to a new receiver can't leak audio ports (which the Vita has
+     * only a few of; exhausting them silently kills audio after ~8 switches). */
+    audio_stop();
+
     s_app = app;
     s_src_rate = app->audio_rate > 0 ? app->audio_rate : 12000;
 
