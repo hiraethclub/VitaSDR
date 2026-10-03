@@ -40,6 +40,14 @@ static kiwi_server s_srv[MAX_SERVERS];
 static int         s_nsrv = 0;
 static int         s_settings_cur = 0;
 
+/* Reference receivers pinned to the top of the picker: known-good public Kiwis
+ * that serve as a reliable fallback (and let us tell a receiver-availability
+ * problem apart from a client-side one). */
+static const struct { const char *host; int port; const char *name; } PINNED[] = {
+    { "gw0kax.proxy.kiwisdr.com", 8073, "gw0kax (reference, proxy)" },
+};
+#define N_PINNED ((int)(sizeof(PINNED) / sizeof(PINNED[0])))
+
 static const int   STEPS[] = { 1, 10, 100, 1000, 5000, 10000, 100000 };
 static const int   NSTEPS = (int)(sizeof(STEPS) / sizeof(STEPS[0]));
 
@@ -77,14 +85,34 @@ static int cmp_srv(const void *a, const void *b)
 int servers_fetch(void)
 {
     s_nsrv = 0;   /* hide the (possibly stale) list while (re)fetching */
-    kiwidir_init(&s_parser, s_srv, MAX_SERVERS);
+    /* Parse the directory into the array after the pinned reference slots. */
+    kiwidir_init(&s_parser, s_srv + N_PINNED, MAX_SERVERS - N_PINNED);
     int rc = http_get(DIR_HOST, DIR_PORT, DIR_PATH, 15000, dir_sink, NULL);
     int n = kiwidir_count(&s_parser);
-    if (rc != HTTP_OK && n == 0)
-        return rc;   /* negative */
-    qsort(s_srv, (size_t)n, sizeof(s_srv[0]), cmp_srv);
-    s_nsrv = n;
-    return n;
+    if (rc != HTTP_OK && n == 0) {
+        /* Even if the fetch failed, still expose the pinned reference(s). */
+        for (int i = 0; i < N_PINNED; i++) {
+            memset(&s_srv[i], 0, sizeof(s_srv[i]));
+            strncpy(s_srv[i].host, PINNED[i].host, sizeof(s_srv[i].host) - 1);
+            strncpy(s_srv[i].name, PINNED[i].name, sizeof(s_srv[i].name) - 1);
+            s_srv[i].port = PINNED[i].port;
+            s_srv[i].snr = -1;
+            s_srv[i].online = 1;
+        }
+        s_nsrv = N_PINNED;
+        return rc;   /* negative, but list still has the pinned entries */
+    }
+    qsort(s_srv + N_PINNED, (size_t)n, sizeof(s_srv[0]), cmp_srv);
+    for (int i = 0; i < N_PINNED; i++) {
+        memset(&s_srv[i], 0, sizeof(s_srv[i]));
+        strncpy(s_srv[i].host, PINNED[i].host, sizeof(s_srv[i].host) - 1);
+        strncpy(s_srv[i].name, PINNED[i].name, sizeof(s_srv[i].name) - 1);
+        s_srv[i].port = PINNED[i].port;
+        s_srv[i].snr = -1;
+        s_srv[i].online = 1;
+    }
+    s_nsrv = N_PINNED + n;
+    return s_nsrv;
 }
 
 int servers_count(void) { return s_nsrv; }
