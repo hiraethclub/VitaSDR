@@ -232,6 +232,13 @@ void ui_draw(app_state *app)
                               "ERR: %s  (Start to retry)", app->last_err);
     }
 
+    /* Audio-only receiver: connected with audio but the receiver won't give us
+     * the waterfall (one-connection-per-IP limit). Say so over the dead area. */
+    if (app->conn_status == CONN_CONNECTED && app->wf_stalled) {
+        vita2d_pgf_draw_textf(s_font, 8, WF_Y + WF_H / 2, COL_AMBER, 0.9f,
+                              "Audio only - this receiver isn't sending a waterfall");
+    }
+
     if (s_msg_frames > 0) {
         vita2d_draw_rectangle(0, SCREEN_H / 2 - 18, SCREEN_W, 36,
                               RGBA8(0, 0, 0, 200));

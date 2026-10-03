@@ -182,33 +182,35 @@ static int audio_thread(SceSize args, void *argp)
 
 int audio_start(app_state *app)
 {
-    /* Defensively release any port/thread left from a previous session so
-     * reconnecting to a new receiver can't leak audio ports (which the Vita has
-     * only a few of; exhausting them silently kills audio after ~8 switches). */
+    /* Stop any running thread first (keeps the port). */
     audio_stop();
 
     s_app = app;
     s_src_rate = app->audio_rate > 0 ? app->audio_rate : 12000;
 
-    s_port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, OUT_GRAIN,
-                                 OUT_RATE, SCE_AUDIO_OUT_MODE_STEREO);
-    vlog("sceAudioOutOpenPort(MAIN,%d,%d,STEREO) = 0x%08X", OUT_GRAIN,
-         OUT_RATE, s_port);
-    if (s_port < 0)
-        return -1;
-
-    int vol[2] = { SCE_AUDIO_VOLUME_0DB, SCE_AUDIO_VOLUME_0DB };
-    sceAudioOutSetVolume(s_port,
-        (SceAudioOutChannelFlag)(SCE_AUDIO_VOLUME_FLAG_L_CH |
-                                 SCE_AUDIO_VOLUME_FLAG_R_CH), vol);
+    /* Open the output port ONCE and reuse it across receiver switches. The Vita
+     * has only a few audio ports and releasing/reopening per reconnect does not
+     * free them promptly (the port id counts down and eventually exhausts,
+     * silently killing audio after ~8 switches), so we hold one for the app's
+     * lifetime and release it only in audio_shutdown(). */
+    if (s_port < 0) {
+        s_port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, OUT_GRAIN,
+                                     OUT_RATE, SCE_AUDIO_OUT_MODE_STEREO);
+        vlog("sceAudioOutOpenPort(MAIN,%d,%d,STEREO) = 0x%08X", OUT_GRAIN,
+             OUT_RATE, s_port);
+        if (s_port < 0)
+            return -1;
+        int vol[2] = { SCE_AUDIO_VOLUME_0DB, SCE_AUDIO_VOLUME_0DB };
+        sceAudioOutSetVolume(s_port,
+            (SceAudioOutChannelFlag)(SCE_AUDIO_VOLUME_FLAG_L_CH |
+                                     SCE_AUDIO_VOLUME_FLAG_R_CH), vol);
+    }
 
     s_run = 1;
     s_thread = sceKernelCreateThread("vitasdr_audio", audio_thread,
                                      0x10000100, 0x10000, 0, 0, NULL);
     vlog("audio thread create = 0x%08X", s_thread);
     if (s_thread < 0) {
-        sceAudioOutReleasePort(s_port);
-        s_port = -1;
         s_run = 0;
         return -1;
     }
@@ -216,6 +218,7 @@ int audio_start(app_state *app)
     return 0;
 }
 
+/* Stop the audio thread but keep the output port open for reuse. */
 void audio_stop(void)
 {
     s_run = 0;
@@ -224,6 +227,12 @@ void audio_stop(void)
         sceKernelDeleteThread(s_thread);
         s_thread = -1;
     }
+}
+
+/* Full teardown for app exit: stop the thread and release the port. */
+void audio_shutdown(void)
+{
+    audio_stop();
     if (s_port >= 0) {
         sceAudioOutReleasePort(s_port);
         s_port = -1;

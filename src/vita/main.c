@@ -269,12 +269,14 @@ int wf_thread(SceSize args, void *argp)
                 last_freq = f;
                 last_ka = last_center = wf_start = last_wf_stat = now_ms();
                 wf_frames = 0;
+                g_app.wf_stalled = 0;
             } else {
                 sceKernelDelayThread(500 * 1000);
             }
         } else if (g_app.conn_status != CONN_CONNECTED && wf_conn) {
             kiwi_wf_disconnect(&w);
             wf_conn = 0;
+            g_app.wf_stalled = 0;
         } else if (wf_conn) {
             int nb = kiwi_wf_poll(&w, bins, KIWI_WF_BINS, 100);
             if (nb < 0) {
@@ -289,10 +291,15 @@ int wf_thread(SceSize args, void *argp)
                 memcpy(g_app.wf_bins, bins, (size_t)nb);
                 g_app.wf_nbins = nb;
                 g_app.wf_have_row = 1;
+                g_app.wf_stalled = 0;
                 if ((++wf_frames % 30) == 0)
                     vlog("wf frames=%lu (nb=%d)", wf_frames, nb);
             }
             uint64_t t = now_ms();
+            /* Flag an audio-only receiver: connected to W/F but no frames after
+             * a few seconds (receiver limits us to one connection per IP). */
+            if (wf_frames == 0 && t - wf_start > 6000)
+                g_app.wf_stalled = 1;
             /* Periodic WF receive diagnostics (even when no frames parse), so we
              * can tell 'server sends nothing' from 'frames arrive but drop'. */
             if (t - last_wf_stat >= 2000) {
@@ -454,6 +461,7 @@ int main(int argc, char *argv[])
     sceKernelDeleteThread(dir_tid);
 
     config_save(&g_app);
+    audio_shutdown();
     wf_render_shutdown();
     vita2d_fini();
     jitter_free(&g_app.jitter);

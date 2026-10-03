@@ -102,6 +102,7 @@ typedef struct {
     volatile int   wf_have_row;
     unsigned char  wf_bins[KIWI_WF_BINS];
     volatile int   wf_nbins;
+    volatile int   wf_stalled;   /* connected but no W/F frames (receiver limit) */
 
     volatile int   running;
 } app_state;
@@ -113,7 +114,8 @@ int  config_save(const app_state *app);
 
 /* audio.c */
 int  audio_start(app_state *app);
-void audio_stop(void);
+void audio_stop(void);      /* stop thread, keep the port open for reuse */
+void audio_shutdown(void);  /* stop thread AND release the port (app exit) */
 
 /* waterfall.c */
 int  wf_render_init(void);
