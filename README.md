@@ -5,20 +5,28 @@ A PS Vita homebrew client for web SDR receivers. Point it at a
 live RF waterfall — a shortwave/HF radio in your hands, using someone else's
 antenna over the internet.
 
-> Status: **v0.1.0 — working on real hardware.** Verified on a PS Vita PCH-1000:
-> connects to a KiwiSDR, plays clean audio, tunes, and renders the waterfall.
-> The radio core also has host-side unit tests. See
+> Status: **v0.2.0 — working on real hardware.** Verified on a PS Vita PCH-1000:
+> browse a live directory of public KiwiSDRs, connect, play audio, tune, and
+> see the waterfall. The radio core also has host-side unit tests. See
 > [Testing status](#testing-status).
 
 ## What works today
 
-- KiwiSDR audio: IMA-ADPCM decode, jitter-buffered playback via `sceAudioOut`
-- Tuning (accelerated analog stick), demodulation mode switching, keepalive
-- Live RF waterfall (1024-bin) + spectrum line, S-meter from the RF signal
-- Config persisted to `ux0:data/vitasdr/config.ini`
+- KiwiSDR audio: IMA-ADPCM decode, windowed-sinc resampler, jitter-buffered
+  playback via `sceAudioOut` (double-buffered); per-mode make-up gain
+- On-startup **server picker** with the live public KiwiSDR directory, plus a
+  user **favourites** list and manual add via the on-screen keyboard
+- **Band-jump selector** (HF amateur/broadcast bands; VHF entries for later)
+- Tuning (D-pad step + accelerated analog sweep), mode switching, keepalive
+- Live RF waterfall (1024-bin, viridis) + spectrum, S-meter, passband overlay
+- **Settings** screen: palette, waterfall speed, audio bandwidth, auto-connect/
+  reconnect, keep-screen-awake, direct frequency entry, and more
+- Bottom-left status panel: server + live battery / CPU / FPS / buffer stats
+- Custom LiveArea icon & splash; crisp bundled UI font
+- Config/favourites persisted under `ux0:data/vitasdr/`
 
-Not yet: OpenWebRX support, touchscreen, bookmarks, band-plan jumps, on-screen
-menu, per-button remapping.
+Not yet: OpenWebRX support (protocol researched), touchscreen, per-button
+remapping.
 
 ## Building
 
