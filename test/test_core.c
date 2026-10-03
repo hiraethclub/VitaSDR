@@ -354,7 +354,7 @@ static void test_bandplan(void)
     CHECK(strcmp(band_lookup(17735.0), "16m SWBC") == 0, "17735 -> 16m SWBC");
     CHECK(strcmp(band_lookup(14200.0), "20m Amateur") == 0, "14200 -> 20m Amateur");
     CHECK(strcmp(band_lookup(1000.0), "MW Broadcast") == 0, "1000 -> MW Broadcast");
-    CHECK(band_lookup(100000.0)[0] == '\0', "out-of-plan -> empty");
+    CHECK(band_lookup(40000.0)[0] == '\0', "out-of-plan (40 MHz gap) -> empty");
 }
 
 /* -------------------- resampler -------------------- */

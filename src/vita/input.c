@@ -62,7 +62,9 @@ static void tune_by(app_state *app, long steps)
     hz += steps * step;
     hz = ((hz + step / 2) / step) * step;   /* snap to nearest grid point */
     if (hz < 0) hz = 0;
-    if (hz > 30000000L) hz = 30000000L;
+    /* Upper bound well into VHF so FM/2m etc. are tunable on VHF-capable
+     * receivers; a KiwiSDR simply won't receive above ~30 MHz. */
+    if (hz > 1800000000L) hz = 1800000000L;
     app->freq_khz = (double)hz / 1000.0;
     sceKernelUnlockMutex(app->lock, 1);
 }
