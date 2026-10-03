@@ -108,11 +108,26 @@ Corrected from the reference client (jks-prv/kiwiclient); the original brief's
 - Keepalive: `SET keepalive` on each connection about once per second.
 - Retune: `SET mod=... freq=<kHz>`; recenter waterfall: `SET zoom=z cf=<kHz>`.
 
-### OpenWebRX/OpenWebRX+ (not yet implemented)
+### OpenWebRX/OpenWebRX+ (planned next; protocol researched)
 
-Single WebSocket to `/ws/`; server greets `CLIENT DE SERVER openwebrx.py`;
-JSON control, binary frames (type byte 1=FFT, 2=audio), IMA-ADPCM audio.
-Planned for a later milestone.
+One WebSocket carries everything (unlike KiwiSDR's two). Sequence, from the
+reference client (jketterl/openwebrx htdocs/openwebrx.js):
+
+- Connect to `ws://host:port/ws/`, binaryType arraybuffer.
+- On open the client sends TEXT `SERVER DE CLIENT client=openwebrx.js type=receiver`,
+  then JSON `{"type":"connectionproperties","params":{"output_rate":N,"hd_output_rate":N}}`.
+- Server greets TEXT `CLIENT DE SERVER server=openwebrx version=...` then JSON
+  `{"type":"config","value":{...}}` with `samp_rate`, `center_freq`, `fft_size`,
+  `audio_compression` ("adpcm" or none), `fft_compression` ("adpcm" or none),
+  `start_mod`, `start_offset_freq`.
+- Client selects/starts DSP and tunes via JSON `dspcontrol` messages
+  (`set_offset_frequency`, `mod`, etc.) — exact set still to be confirmed.
+- Binary frames are tagged by a leading type byte (1=FFT/waterfall, 2=audio);
+  audio is IMA-ADPCM when `audio_compression=="adpcm"` (our decoder applies),
+  otherwise raw. FFT likewise.
+
+Each saved server/favourite will carry a protocol tag (Kiwi vs OpenWebRX) so the
+connection layer picks the right client. Not yet implemented.
 
 ## UI layout (960x544)
 
@@ -135,7 +150,14 @@ Planned for a later milestone.
 | L + R together    | Cycle demodulation mode                             |
 | Start             | Connect / disconnect                                |
 | Select            | Toggle spectrum overlay                             |
-| Circle            | Exit                                                |
+| Square            | Open the band-jump selector                         |
+| Triangle          | Open settings                                       |
+| Circle            | Open the server picker (PS button exits the app)    |
+
+On the server picker: X connect, Start toggle favourite (*), Select add a
+receiver by hand (on-screen keyboard), Square refresh the directory, Triangle
+settings. Favourites are stored in `favourites.txt` and shown at the top.
+On the band selector: Up/Down choose a band, X jumps to it, Circle/Triangle back.
 
 All tuning snaps to the current step grid so it lands on clean frequencies.
 Volume is a software gain (up to ~8x) with clipping, since receiver audio sits

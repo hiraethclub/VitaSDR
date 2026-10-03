@@ -7,6 +7,7 @@
 #include "app.h"
 #include "httpget.h"
 #include "kiwidir.h"
+#include "bandplan.h"
 #include "build_info.h"
 
 #include <psp2/ctrl.h>
@@ -40,14 +41,82 @@ static vita2d_pgf *s_font = NULL;
 static kiwi_server s_srv[MAX_SERVERS];
 static int         s_nsrv = 0;
 static int         s_settings_cur = 0;
+static int         s_band_cur = 0;
 
-/* Reference receivers pinned to the top of the picker: known-good public Kiwis
- * that serve as a reliable fallback (and let us tell a receiver-availability
- * problem apart from a client-side one). */
-static const struct { const char *host; int port; const char *name; } PINNED[] = {
-    { "gw0kax.proxy.kiwisdr.com", 8073, "gw0kax (reference, proxy)" },
-};
-#define N_PINNED ((int)(sizeof(PINNED) / sizeof(PINNED[0])))
+/* Favourites: user-curated receivers shown at the top of the picker. Stored in
+ * VITASDR_DATA_DIR/favourites.txt as "host,port,name" per line. Seeded on first
+ * run with a known-good reference so there's always something that connects. */
+#define MAX_FAV 32
+#define FAV_FILE VITASDR_DATA_DIR "/favourites.txt"
+static kiwi_server s_fav[MAX_FAV];
+static int         s_nfav = 0;
+
+static void fav_save(void)
+{
+    FILE *f = fopen(FAV_FILE, "w");
+    if (!f) return;
+    for (int i = 0; i < s_nfav; i++)
+        fprintf(f, "%s,%d,%s\n", s_fav[i].host, s_fav[i].port, s_fav[i].name);
+    fclose(f);
+}
+
+static void fav_add_fields(const char *host, int port, const char *name)
+{
+    if (s_nfav >= MAX_FAV || !host[0]) return;
+    kiwi_server *s = &s_fav[s_nfav++];
+    memset(s, 0, sizeof(*s));
+    strncpy(s->host, host, sizeof(s->host) - 1);
+    strncpy(s->name, name && name[0] ? name : host, sizeof(s->name) - 1);
+    s->port = port > 0 ? port : 8073;
+    s->snr = -1;
+    s->online = 1;
+}
+
+static void fav_load(void)
+{
+    s_nfav = 0;
+    FILE *f = fopen(FAV_FILE, "r");
+    if (!f) {
+        /* First run: seed with a reliable reference. */
+        fav_add_fields("gw0kax.proxy.kiwisdr.com", 8073, "gw0kax (reference)");
+        fav_save();
+        return;
+    }
+    char line[256];
+    while (fgets(line, sizeof(line), f) && s_nfav < MAX_FAV) {
+        char *nl = line; while (*nl && *nl != '\n' && *nl != '\r') nl++; *nl = '\0';
+        if (!line[0]) continue;
+        char *c1 = strchr(line, ',');
+        if (!c1) continue;
+        *c1 = '\0';
+        char *c2 = strchr(c1 + 1, ',');
+        if (!c2) continue;
+        *c2 = '\0';
+        fav_add_fields(line, atoi(c1 + 1), c2 + 1);
+    }
+    fclose(f);
+}
+
+static int fav_find(const char *host, int port)
+{
+    for (int i = 0; i < s_nfav; i++)
+        if (s_fav[i].port == port && strcmp(s_fav[i].host, host) == 0)
+            return i;
+    return -1;
+}
+
+static void fav_toggle(const kiwi_server *s)
+{
+    if (!s) return;
+    int idx = fav_find(s->host, s->port);
+    if (idx >= 0) {
+        for (int i = idx; i < s_nfav - 1; i++) s_fav[i] = s_fav[i + 1];
+        s_nfav--;
+    } else {
+        fav_add_fields(s->host, s->port, s->name);
+    }
+    fav_save();
+}
 
 static const int   STEPS[] = { 1, 10, 100, 1000, 5000, 10000, 100000 };
 static const int   NSTEPS = (int)(sizeof(STEPS) / sizeof(STEPS[0]));
@@ -86,47 +155,36 @@ static int cmp_srv(const void *a, const void *b)
 int servers_fetch(void)
 {
     s_nsrv = 0;   /* hide the (possibly stale) list while (re)fetching */
-    /* Parse the directory into the array after the pinned reference slots. */
-    kiwidir_init(&s_parser, s_srv + N_PINNED, MAX_SERVERS - N_PINNED);
+    kiwidir_init(&s_parser, s_srv, MAX_SERVERS);
     int rc = http_get(DIR_HOST, DIR_PORT, DIR_PATH, 15000, dir_sink, NULL);
     int n = kiwidir_count(&s_parser);
-    if (rc != HTTP_OK && n == 0) {
-        /* Even if the fetch failed, still expose the pinned reference(s). */
-        for (int i = 0; i < N_PINNED; i++) {
-            memset(&s_srv[i], 0, sizeof(s_srv[i]));
-            strncpy(s_srv[i].host, PINNED[i].host, sizeof(s_srv[i].host) - 1);
-            strncpy(s_srv[i].name, PINNED[i].name, sizeof(s_srv[i].name) - 1);
-            s_srv[i].port = PINNED[i].port;
-            s_srv[i].snr = -1;
-            s_srv[i].online = 1;
-        }
-        s_nsrv = N_PINNED;
-        return rc;   /* negative, but list still has the pinned entries */
-    }
-    qsort(s_srv + N_PINNED, (size_t)n, sizeof(s_srv[0]), cmp_srv);
-    for (int i = 0; i < N_PINNED; i++) {
-        memset(&s_srv[i], 0, sizeof(s_srv[i]));
-        strncpy(s_srv[i].host, PINNED[i].host, sizeof(s_srv[i].host) - 1);
-        strncpy(s_srv[i].name, PINNED[i].name, sizeof(s_srv[i].name) - 1);
-        s_srv[i].port = PINNED[i].port;
-        s_srv[i].snr = -1;
-        s_srv[i].online = 1;
-    }
-    s_nsrv = N_PINNED + n;
-    return s_nsrv;
+    if (rc != HTTP_OK && n == 0)
+        return rc;   /* negative; favourites are still shown */
+    qsort(s_srv, (size_t)n, sizeof(s_srv[0]), cmp_srv);
+    s_nsrv = n;
+    return n;
 }
 
 int servers_count(void) { return s_nsrv; }
-const kiwi_server *servers_at(int i)
+
+/* The picker shows favourites first, then the fetched directory. These map a
+ * combined row index onto the right list. */
+static int picker_total(void) { return s_nfav + s_nsrv; }
+static const kiwi_server *picker_at(int i)
 {
-    if (i < 0 || i >= s_nsrv) return NULL;
-    return &s_srv[i];
+    if (i < 0) return NULL;
+    if (i < s_nfav) return &s_fav[i];
+    i -= s_nfav;
+    if (i < s_nsrv) return &s_srv[i];
+    return NULL;
 }
+const kiwi_server *servers_at(int i) { return picker_at(i); }
 
 void menu_init(void)
 {
     s_nsrv = 0;
     s_settings_cur = 0;
+    fav_load();
 }
 
 /* ================= on-screen keyboard (IME) ================= */
@@ -214,7 +272,10 @@ static void draw_picker(app_state *app)
                               "%d receivers", s_nsrv);
     }
 
-    int n = (status == DIR_FETCHING) ? 0 : s_nsrv;
+    /* Combined list: favourites first, then the directory (hidden while a
+     * refresh is in flight so a half-parsed list isn't shown). */
+    int dir_n = (status == DIR_FETCHING) ? 0 : s_nsrv;
+    int n = s_nfav + dir_n;
     if (n > 0) {
         int top = app->sel - VIS_ROWS / 2;
         if (top < 0) top = 0;
@@ -223,23 +284,28 @@ static void draw_picker(app_state *app)
 
         for (int r = 0; r < VIS_ROWS && top + r < n; r++) {
             int idx = top + r;
-            const kiwi_server *s = &s_srv[idx];
+            int is_fav = (idx < s_nfav);
+            const kiwi_server *s = is_fav ? &s_fav[idx] : &s_srv[idx - s_nfav];
             int y = LIST_Y + r * ROW_H;
             if (idx == app->sel)
                 vita2d_draw_rectangle(0, y - 18, SCREEN_W, ROW_H, COL_SELBG);
 
+            if (is_fav)
+                vita2d_pgf_draw_textf(s_font, 12, y, COL_AMBER, 0.9f, "*");
             unsigned int name_col = (idx == app->sel) ? COL_TEXT : COL_DIM;
-            vita2d_pgf_draw_textf(s_font, 12, y, name_col, 0.9f,
-                                  "%.40s", s->name[0] ? s->name : s->host);
+            vita2d_pgf_draw_textf(s_font, 28, y, name_col, 0.9f,
+                                  "%.38s", s->name[0] ? s->name : s->host);
             vita2d_pgf_draw_textf(s_font, 560, y, COL_DIM, 0.8f,
                                   "%.22s", s->loc);
-            unsigned int ucol = (s->users >= s->users_max && s->users_max > 0)
-                                ? COL_AMBER : COL_GREEN;
-            vita2d_pgf_draw_textf(s_font, 770, y, ucol, 0.8f,
-                                  "%d/%d", s->users, s->users_max);
-            if (s->snr >= 0)
-                vita2d_pgf_draw_textf(s_font, 850, y, COL_DIM, 0.8f,
-                                      "snr%d", s->snr);
+            if (!is_fav) {
+                unsigned int ucol = (s->users >= s->users_max && s->users_max > 0)
+                                    ? COL_AMBER : COL_GREEN;
+                vita2d_pgf_draw_textf(s_font, 770, y, ucol, 0.8f,
+                                      "%d/%d", s->users, s->users_max);
+                if (s->snr >= 0)
+                    vita2d_pgf_draw_textf(s_font, 850, y, COL_DIM, 0.8f,
+                                          "snr%d", s->snr);
+            }
         }
     } else if (status != DIR_FETCHING) {
         vita2d_pgf_draw_textf(s_font, 12, LIST_Y + 20, COL_DIM, 1.0f,
@@ -247,8 +313,8 @@ static void draw_picker(app_state *app)
     }
 
     vita2d_draw_rectangle(0, SCREEN_H - 28, SCREEN_W, 28, COL_BAR);
-    vita2d_pgf_draw_textf(s_font, 12, SCREEN_H - 9, COL_DIM, 0.8f,
-        "Up/Down select   L/R page   X connect   [] refresh   /\\ settings");
+    vita2d_pgf_draw_textf(s_font, 12, SCREEN_H - 9, COL_DIM, 0.72f,
+        "X connect  START fav(*)  SELECT add  [] refresh  /\\ settings  O radio");
 }
 
 /* ================= settings ================= */
@@ -352,10 +418,50 @@ static void draw_settings(app_state *app)
 
 /* ================= public draw / input ================= */
 
+/* ================= band selector ================= */
+
+static void draw_bands(app_state *app)
+{
+    (void)app;
+    ensure_font();
+    vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+    vita2d_draw_rectangle(0, 0, SCREEN_W, 40, COL_BAR);
+    vita2d_pgf_draw_textf(s_font, 12, 28, COL_TEXT, 1.2f, "Jump to band");
+
+    int nb = bandplan_count();
+    int top = s_band_cur - VIS_ROWS / 2;
+    if (top < 0) top = 0;
+    if (top > nb - VIS_ROWS) top = nb - VIS_ROWS;
+    if (top < 0) top = 0;
+
+    for (int r = 0; r < VIS_ROWS && top + r < nb; r++) {
+        int idx = top + r;
+        const char *name, *mode; double f;
+        bandplan_get(idx, &name, &f, &mode);
+        int y = LIST_Y + r * ROW_H;
+        if (idx == s_band_cur)
+            vita2d_draw_rectangle(0, y - 18, SCREEN_W, ROW_H, COL_SELBG);
+        unsigned int col = (idx == s_band_cur) ? COL_TEXT : COL_DIM;
+        vita2d_pgf_draw_textf(s_font, 20, y, col, 0.95f, "%s", name);
+        /* mode in upper case */
+        char mu[8]; size_t i = 0;
+        for (; i < sizeof(mu) - 1 && mode[i]; i++)
+            mu[i] = (mode[i] >= 'a' && mode[i] <= 'z') ? (char)(mode[i] - 32) : mode[i];
+        mu[i] = '\0';
+        vita2d_pgf_draw_textf(s_font, 420, y, COL_ACCENT, 0.9f, "%.0f kHz", f);
+        vita2d_pgf_draw_textf(s_font, 600, y, COL_DIM, 0.9f, "%s", mu);
+    }
+
+    vita2d_draw_rectangle(0, SCREEN_H - 28, SCREEN_W, 28, COL_BAR);
+    vita2d_pgf_draw_textf(s_font, 12, SCREEN_H - 9, COL_DIM, 0.8f,
+        "Up/Down select   X jump to band   O / Triangle back");
+}
+
 void menu_draw(app_state *app)
 {
-    if (app->screen == SCREEN_SETTINGS) draw_settings(app);
-    else                                draw_picker(app);
+    if (app->screen == SCREEN_SETTINGS)   draw_settings(app);
+    else if (app->screen == SCREEN_BANDS) draw_bands(app);
+    else                                  draw_picker(app);
 }
 
 static void adjust(int *v, int delta, int lo, int hi)
@@ -429,15 +535,38 @@ static void picker_connect(app_state *app)
     config_save(app);   /* persist chosen host (no in-app quit saves on exit) */
 }
 
+/* Prompt for a host and port and add it to favourites (for receivers not in the
+ * public directory, e.g. your own). */
+static void picker_add_manual(app_state *app)
+{
+    const char *host = ime_get_text("Receiver host (e.g. my.sdr.net)", "");
+    if (!host || !host[0]) return;
+    char hostbuf[96];
+    strncpy(hostbuf, host, sizeof(hostbuf) - 1);
+    hostbuf[sizeof(hostbuf) - 1] = '\0';
+    const char *ports = ime_get_text("Port", "8073");
+    int port = ports ? atoi(ports) : 8073;
+    if (port <= 0) port = 8073;
+    fav_add_fields(hostbuf, port, hostbuf);
+    fav_save();
+    app->sel = 0;   /* new favourite lands at the top */
+    ui_show_message(app, "added to favourites");
+}
+
 void menu_handle(app_state *app, unsigned int pressed)
 {
     if (app->screen == SCREEN_SERVERS) {
-        int n = s_nsrv;
+        int n = picker_total();
         if ((pressed & SCE_CTRL_UP) && n > 0)    adjust(&app->sel, -1, 0, n - 1);
         if ((pressed & SCE_CTRL_DOWN) && n > 0)  adjust(&app->sel, +1, 0, n - 1);
         if ((pressed & SCE_CTRL_LEFT) && n > 0)  adjust(&app->sel, -10, 0, n - 1);
         if ((pressed & SCE_CTRL_RIGHT) && n > 0) adjust(&app->sel, +10, 0, n - 1);
         if (pressed & SCE_CTRL_CROSS)            picker_connect(app);
+        if (pressed & SCE_CTRL_START) {          /* toggle favourite on selection */
+            const kiwi_server *s = picker_at(app->sel);
+            if (s) { fav_toggle(s); if (app->sel >= picker_total()) app->sel = picker_total() - 1; }
+        }
+        if (pressed & SCE_CTRL_SELECT)           picker_add_manual(app);
         if (pressed & SCE_CTRL_SQUARE) {
             if (app->dir_status != DIR_FETCHING) app->cmd_fetch_dir = 1;
         }
@@ -445,6 +574,26 @@ void menu_handle(app_state *app, unsigned int pressed)
         if (pressed & SCE_CTRL_CIRCLE) {
             if (app->conn_status == CONN_CONNECTED) app->screen = SCREEN_RADIO;
         }
+        return;
+    }
+
+    if (app->screen == SCREEN_BANDS) {
+        int nb = bandplan_count();
+        if ((pressed & SCE_CTRL_UP) && nb > 0)   adjust(&s_band_cur, -1, 0, nb - 1);
+        if ((pressed & SCE_CTRL_DOWN) && nb > 0) adjust(&s_band_cur, +1, 0, nb - 1);
+        if (pressed & SCE_CTRL_CROSS) {
+            double f; const char *mode;
+            bandplan_get(s_band_cur, NULL, &f, &mode);
+            sceKernelLockMutex(app->lock, 1, NULL);
+            app->freq_khz = f;
+            strncpy(app->mode, mode, sizeof(app->mode) - 1);
+            app->mode[sizeof(app->mode) - 1] = '\0';
+            sceKernelUnlockMutex(app->lock, 1);
+            app->screen = SCREEN_RADIO;
+            ui_show_message(app, "tuned to band");
+        }
+        if (pressed & (SCE_CTRL_TRIANGLE | SCE_CTRL_CIRCLE))
+            app->screen = SCREEN_RADIO;
         return;
     }
 

@@ -10,6 +10,7 @@
  *   Start            connect / disconnect
  *   Select           toggle spectrum
  *   Triangle         open settings
+ *   Square           open the band selector
  *   Circle           open the server picker (PS button quits the app)
  * All tuning snaps to the current step grid so it lands on clean frequencies.
  */
@@ -176,6 +177,10 @@ void input_poll(app_state *app)
     /* ---- Triangle: open settings ---- */
     if (pressed & SCE_CTRL_TRIANGLE)
         app->screen = SCREEN_SETTINGS;
+
+    /* ---- Square: open the band selector ---- */
+    if (pressed & SCE_CTRL_SQUARE)
+        app->screen = SCREEN_BANDS;
 
     /* ---- Circle: open the server picker (does NOT quit; use the PS button
      * to exit, so a stray press can't drop the app). ---- */

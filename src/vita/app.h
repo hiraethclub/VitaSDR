@@ -35,7 +35,8 @@ enum {
 enum {
     SCREEN_SERVERS = 0,   /* directory picker (startup) */
     SCREEN_RADIO,         /* the radio client */
-    SCREEN_SETTINGS       /* settings + credits */
+    SCREEN_SETTINGS,      /* settings + credits */
+    SCREEN_BANDS          /* band-jump selector */
 };
 
 /* Directory fetch state. */
