@@ -12,6 +12,7 @@
 #include "log.h"
 #include "b64.h"
 #include "build_info.h"
+#include "font.h"
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -397,6 +398,7 @@ int main(int argc, char *argv[])
     vita2d_init();
     vita2d_set_clear_color(RGBA8(10, 12, 16, 255));
     wf_render_init();
+    font_ensure();
     input_init();
     menu_init();
 

@@ -87,6 +87,7 @@ if(VITA)
       src/vita/config.c
       src/vita/log.c
       src/vita/b64.c
+      src/vita/font.c
       src/vita/menu.c
       src/vita/main.c)
 
@@ -118,6 +119,7 @@ if(VITA)
       png
       jpeg
       z
+      bz2
       m)
 
   vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME} UNSAFE)
@@ -135,11 +137,13 @@ if(VITA)
         FILE sce_sys/icon0.png sce_sys/icon0.png
         FILE sce_sys/livearea/contents/bg0.png sce_sys/livearea/contents/bg0.png
         FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
-        FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
+        FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+        FILE resources/font.ttf resources/font.ttf)
   else()
     vita_create_vpk(${VPK_FILE} ${VITA_TITLEID} ${PROJECT_NAME}.self
         VERSION ${VITA_VERSION}
-        NAME ${VITA_APP_NAME})
+        NAME ${VITA_APP_NAME}
+        FILE resources/font.ttf resources/font.ttf)
   endif()
 
 else()

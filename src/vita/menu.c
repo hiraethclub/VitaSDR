@@ -9,6 +9,7 @@
 #include "kiwidir.h"
 #include "bandplan.h"
 #include "build_info.h"
+#include "font.h"
 
 #include <psp2/ctrl.h>
 #include <psp2/ime_dialog.h>
@@ -37,7 +38,6 @@
 #define COL_AMBER  RGBA8(240, 180, 60, 255)
 #define COL_SELBG  RGBA8(40, 70, 90, 255)
 
-static vita2d_pgf *s_font = NULL;
 static kiwi_server s_srv[MAX_SERVERS];
 static int         s_nsrv = 0;
 static int         s_settings_cur = 0;
@@ -120,12 +120,6 @@ static void fav_toggle(const kiwi_server *s)
 
 static const int   STEPS[] = { 1, 10, 100, 1000, 5000, 10000, 100000 };
 static const int   NSTEPS = (int)(sizeof(STEPS) / sizeof(STEPS[0]));
-
-static void ensure_font(void)
-{
-    if (!s_font)
-        s_font = vita2d_load_default_pgf();
-}
 
 /* ================= directory fetch (called on the net thread) ================= */
 
@@ -255,20 +249,20 @@ const char *ime_get_text(const char *title, const char *initial)
 
 static void draw_picker(app_state *app)
 {
-    ensure_font();
+    font_ensure();
     vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
     vita2d_draw_rectangle(0, 0, SCREEN_W, 40, COL_BAR);
-    vita2d_pgf_draw_textf(s_font, 12, 28, COL_TEXT, 1.2f, "Select a KiwiSDR");
+    font_drawf(12, 28, COL_TEXT, 1.2f, "Select a KiwiSDR");
 
     int status = app->dir_status;
     if (status == DIR_FETCHING) {
-        vita2d_pgf_draw_textf(s_font, 300, 28, COL_AMBER, 1.0f,
+        font_drawf(300, 28, COL_AMBER, 1.0f,
                               "fetching directory...");
     } else if (status == DIR_ERROR) {
-        vita2d_pgf_draw_textf(s_font, 300, 28, COL_AMBER, 1.0f,
+        font_drawf(300, 28, COL_AMBER, 1.0f,
                               "fetch failed - press [] to retry");
     } else {
-        vita2d_pgf_draw_textf(s_font, 300, 28, COL_DIM, 0.9f,
+        font_drawf(300, 28, COL_DIM, 0.9f,
                               "%d receivers", s_nsrv);
     }
 
@@ -291,29 +285,29 @@ static void draw_picker(app_state *app)
                 vita2d_draw_rectangle(0, y - 18, SCREEN_W, ROW_H, COL_SELBG);
 
             if (is_fav)
-                vita2d_pgf_draw_textf(s_font, 12, y, COL_AMBER, 0.9f, "*");
+                font_drawf(12, y, COL_AMBER, 0.9f, "*");
             unsigned int name_col = (idx == app->sel) ? COL_TEXT : COL_DIM;
-            vita2d_pgf_draw_textf(s_font, 28, y, name_col, 0.9f,
+            font_drawf(28, y, name_col, 0.9f,
                                   "%.38s", s->name[0] ? s->name : s->host);
-            vita2d_pgf_draw_textf(s_font, 560, y, COL_DIM, 0.8f,
+            font_drawf(560, y, COL_DIM, 0.8f,
                                   "%.22s", s->loc);
             if (!is_fav) {
                 unsigned int ucol = (s->users >= s->users_max && s->users_max > 0)
                                     ? COL_AMBER : COL_GREEN;
-                vita2d_pgf_draw_textf(s_font, 770, y, ucol, 0.8f,
+                font_drawf(770, y, ucol, 0.8f,
                                       "%d/%d", s->users, s->users_max);
                 if (s->snr >= 0)
-                    vita2d_pgf_draw_textf(s_font, 850, y, COL_DIM, 0.8f,
+                    font_drawf(850, y, COL_DIM, 0.8f,
                                           "snr%d", s->snr);
             }
         }
     } else if (status != DIR_FETCHING) {
-        vita2d_pgf_draw_textf(s_font, 12, LIST_Y + 20, COL_DIM, 1.0f,
+        font_drawf(12, LIST_Y + 20, COL_DIM, 1.0f,
                               "No receivers. Press [] to fetch the directory.");
     }
 
     vita2d_draw_rectangle(0, SCREEN_H - 28, SCREEN_W, 28, COL_BAR);
-    vita2d_pgf_draw_textf(s_font, 12, SCREEN_H - 9, COL_DIM, 0.72f,
+    font_drawf(12, SCREEN_H - 9, COL_DIM, 0.72f,
         "X connect  START fav(*)  SELECT add  [] refresh  /\\ settings  O radio");
 }
 
@@ -386,33 +380,33 @@ static const char *SET_LABELS[SET_COUNT] = {
 
 static void draw_settings(app_state *app)
 {
-    ensure_font();
+    font_ensure();
     vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
     vita2d_draw_rectangle(0, 0, SCREEN_W, 40, COL_BAR);
-    vita2d_pgf_draw_textf(s_font, 12, 28, COL_TEXT, 1.2f, "Settings");
+    font_drawf(12, 28, COL_TEXT, 1.2f, "Settings");
 
     for (int i = 0; i < SET_COUNT; i++) {
         int y = 68 + i * 26;
         if (i == s_settings_cur)
             vita2d_draw_rectangle(0, y - 18, SCREEN_W, 26, COL_SELBG);
         unsigned int col = (i == s_settings_cur) ? COL_TEXT : COL_DIM;
-        vita2d_pgf_draw_textf(s_font, 20, y, col, 0.95f, "%s", SET_LABELS[i]);
+        font_drawf(20, y, col, 0.95f, "%s", SET_LABELS[i]);
         char val[40];
         setting_value(app, i, val, sizeof(val));
-        vita2d_pgf_draw_textf(s_font, 520, y, COL_ACCENT, 0.95f, "%s", val);
+        font_drawf(520, y, COL_ACCENT, 0.95f, "%s", val);
     }
 
     /* Author credits + version. */
     int cy = SCREEN_H - 92;
     vita2d_draw_rectangle(0, cy - 6, SCREEN_W, 92, COL_BAR);
-    vita2d_pgf_draw_textf(s_font, 20, cy + 16, COL_TEXT, 0.9f,
+    font_drawf(20, cy + 16, COL_TEXT, 0.9f,
                           "%s (r%s)  -  by Aisling de Gr\xC3\xA1s",
                           VITASDR_APP_LABEL, VITASDR_BUILD_REV);
-    vita2d_pgf_draw_textf(s_font, 20, cy + 40, COL_DIM, 0.85f,
+    font_drawf(20, cy + 40, COL_DIM, 0.85f,
                           "aisling@hiraeth.club");
-    vita2d_pgf_draw_textf(s_font, 20, cy + 62, COL_DIM, 0.85f,
+    font_drawf(20, cy + 62, COL_DIM, 0.85f,
                           "Threads: @hiraeth.clwb");
-    vita2d_pgf_draw_textf(s_font, 560, cy + 62, COL_DIM, 0.8f,
+    font_drawf(560, cy + 62, COL_DIM, 0.8f,
         "Up/Down move   L/R change   X select   /\\ or O back");
 }
 
@@ -423,10 +417,10 @@ static void draw_settings(app_state *app)
 static void draw_bands(app_state *app)
 {
     (void)app;
-    ensure_font();
+    font_ensure();
     vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
     vita2d_draw_rectangle(0, 0, SCREEN_W, 40, COL_BAR);
-    vita2d_pgf_draw_textf(s_font, 12, 28, COL_TEXT, 1.2f, "Jump to band");
+    font_drawf(12, 28, COL_TEXT, 1.2f, "Jump to band");
 
     int nb = bandplan_count();
     int top = s_band_cur - VIS_ROWS / 2;
@@ -442,18 +436,18 @@ static void draw_bands(app_state *app)
         if (idx == s_band_cur)
             vita2d_draw_rectangle(0, y - 18, SCREEN_W, ROW_H, COL_SELBG);
         unsigned int col = (idx == s_band_cur) ? COL_TEXT : COL_DIM;
-        vita2d_pgf_draw_textf(s_font, 20, y, col, 0.95f, "%s", name);
+        font_drawf(20, y, col, 0.95f, "%s", name);
         /* mode in upper case */
         char mu[8]; size_t i = 0;
         for (; i < sizeof(mu) - 1 && mode[i]; i++)
             mu[i] = (mode[i] >= 'a' && mode[i] <= 'z') ? (char)(mode[i] - 32) : mode[i];
         mu[i] = '\0';
-        vita2d_pgf_draw_textf(s_font, 420, y, COL_ACCENT, 0.9f, "%.0f kHz", f);
-        vita2d_pgf_draw_textf(s_font, 600, y, COL_DIM, 0.9f, "%s", mu);
+        font_drawf(420, y, COL_ACCENT, 0.9f, "%.0f kHz", f);
+        font_drawf(600, y, COL_DIM, 0.9f, "%s", mu);
     }
 
     vita2d_draw_rectangle(0, SCREEN_H - 28, SCREEN_W, 28, COL_BAR);
-    vita2d_pgf_draw_textf(s_font, 12, SCREEN_H - 9, COL_DIM, 0.8f,
+    font_drawf(12, SCREEN_H - 9, COL_DIM, 0.8f,
         "Up/Down select   X jump to band   O / Triangle back");
 }
 
@@ -559,8 +553,8 @@ void menu_handle(app_state *app, unsigned int pressed)
         int n = picker_total();
         if ((pressed & SCE_CTRL_UP) && n > 0)    adjust(&app->sel, -1, 0, n - 1);
         if ((pressed & SCE_CTRL_DOWN) && n > 0)  adjust(&app->sel, +1, 0, n - 1);
-        if ((pressed & SCE_CTRL_LEFT) && n > 0)  adjust(&app->sel, -10, 0, n - 1);
-        if ((pressed & SCE_CTRL_RIGHT) && n > 0) adjust(&app->sel, +10, 0, n - 1);
+        if ((pressed & SCE_CTRL_LEFT) && n > 0)  adjust(&app->sel, -5, 0, n - 1);
+        if ((pressed & SCE_CTRL_RIGHT) && n > 0) adjust(&app->sel, +5, 0, n - 1);
         if (pressed & SCE_CTRL_CROSS)            picker_connect(app);
         if (pressed & SCE_CTRL_START) {          /* toggle favourite on selection */
             const kiwi_server *s = picker_at(app->sel);
@@ -579,8 +573,10 @@ void menu_handle(app_state *app, unsigned int pressed)
 
     if (app->screen == SCREEN_BANDS) {
         int nb = bandplan_count();
-        if ((pressed & SCE_CTRL_UP) && nb > 0)   adjust(&s_band_cur, -1, 0, nb - 1);
-        if ((pressed & SCE_CTRL_DOWN) && nb > 0) adjust(&s_band_cur, +1, 0, nb - 1);
+        if ((pressed & SCE_CTRL_UP) && nb > 0)    adjust(&s_band_cur, -1, 0, nb - 1);
+        if ((pressed & SCE_CTRL_DOWN) && nb > 0)  adjust(&s_band_cur, +1, 0, nb - 1);
+        if ((pressed & SCE_CTRL_LEFT) && nb > 0)  adjust(&s_band_cur, -5, 0, nb - 1);
+        if ((pressed & SCE_CTRL_RIGHT) && nb > 0) adjust(&s_band_cur, +5, 0, nb - 1);
         if (pressed & SCE_CTRL_CROSS) {
             double f; const char *mode;
             bandplan_get(s_band_cur, NULL, &f, &mode);

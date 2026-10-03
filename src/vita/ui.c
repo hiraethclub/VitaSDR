@@ -2,8 +2,11 @@
  * All drawing happens between vita2d_start_drawing/end_drawing in main.c. */
 #include "app.h"
 #include "bandplan.h"
+#include "font.h"
 
 #include <vita2d.h>
+#include <psp2/power.h>
+#include <psp2/kernel/processmgr.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -27,15 +30,8 @@
 #define COL_AMBER  RGBA8(240, 180, 60, 255)
 #define COL_SPEC   RGBA8(90, 220, 160, 255)
 
-static vita2d_pgf *s_font = NULL;
 static char s_msg[128] = {0};
 static int  s_msg_frames = 0;
-
-static void ensure_font(void)
-{
-    if (!s_font)
-        s_font = vita2d_load_default_pgf();
-}
 
 void ui_show_message(app_state *app, const char *msg)
 {
@@ -70,23 +66,27 @@ static void draw_status_bar(app_state *app)
 
     char freq[32];
     format_freq(app->freq_khz, freq, sizeof(freq));
-    vita2d_pgf_draw_textf(s_font, 8, 22, COL_TEXT, 1.3f, "%s MHz", freq);
+    font_drawf(8, 22, COL_TEXT, 1.3f, "%s MHz", freq);
 
-    /* Mode + step. */
+    /* Mode + step. "nbfm" shows as the friendlier "FM". */
     char mode_up[8];
-    size_t i;
-    for (i = 0; i < sizeof(mode_up) - 1 && app->mode[i]; i++)
-        mode_up[i] = (app->mode[i] >= 'a' && app->mode[i] <= 'z')
-                     ? (char)(app->mode[i] - 32) : app->mode[i];
-    mode_up[i] = '\0';
-    vita2d_pgf_draw_textf(s_font, 300, 22, COL_ACCENT, 1.0f, "%s", mode_up);
+    if (strcmp(app->mode, "nbfm") == 0) {
+        strcpy(mode_up, "FM");
+    } else {
+        size_t i;
+        for (i = 0; i < sizeof(mode_up) - 1 && app->mode[i]; i++)
+            mode_up[i] = (app->mode[i] >= 'a' && app->mode[i] <= 'z')
+                         ? (char)(app->mode[i] - 32) : app->mode[i];
+        mode_up[i] = '\0';
+    }
+    font_drawf(300, 22, COL_ACCENT, 1.0f, "%s", mode_up);
 
     char stepbuf[24];
     if (app->step_hz >= 1000)
         snprintf(stepbuf, sizeof(stepbuf), "step %dk", app->step_hz / 1000);
     else
         snprintf(stepbuf, sizeof(stepbuf), "step %dHz", app->step_hz);
-    vita2d_pgf_draw_textf(s_font, 360, 22, COL_DIM, 1.0f, "%s", stepbuf);
+    font_drawf(360, 22, COL_DIM, 1.0f, "%s", stepbuf);
 
     /* S-meter bar. */
     int s = rssi_to_s(app->rssi_dbm);
@@ -96,10 +96,10 @@ static void draw_status_bar(app_state *app)
     unsigned int scol = (s >= 9) ? COL_RED : COL_GREEN;
     vita2d_draw_rectangle(mx, my, fillw, mh, scol);
     if (s <= 9)
-        vita2d_pgf_draw_textf(s_font, mx + mw + 6, 22, COL_TEXT, 0.9f,
+        font_drawf(mx + mw + 6, 22, COL_TEXT, 0.9f,
                               "S%d", s);
     else
-        vita2d_pgf_draw_textf(s_font, mx + mw + 6, 22, COL_TEXT, 0.9f,
+        font_drawf(mx + mw + 6, 22, COL_TEXT, 0.9f,
                               "S9+%d", (s - 9) * 6);
 
     /* Connection status dot + label. */
@@ -112,7 +112,7 @@ static void draw_status_bar(app_state *app)
     default:              dot = COL_DIM;   label = "OFF"; break;
     }
     vita2d_draw_rectangle(SCREEN_W - 70, 9, 12, 12, dot);
-    vita2d_pgf_draw_textf(s_font, SCREEN_W - 52, 22, COL_TEXT, 0.9f,
+    font_drawf(SCREEN_W - 52, 22, COL_TEXT, 0.9f,
                           "%s", label);
 }
 
@@ -157,14 +157,69 @@ static void draw_ruler(app_state *app)
         if (x + est_w > panel_w - pad)
             x = panel_w - pad - est_w;
 
-        vita2d_pgf_draw_textf(s_font, x, ry + 20, COL_DIM, 0.7f, "%s", lbl);
+        font_drawf(x, ry + 20, COL_DIM, 0.7f, "%s", lbl);
+    }
+}
+
+/* Status panel in the bottom-left, under the ruler: current server and live
+ * Vita hardware stats. */
+static void draw_status_panel(app_state *app)
+{
+    int x = 8;
+    int y = BOTTOM_Y + 40;   /* below the ruler tick labels */
+
+    /* --- server line --- */
+    const char *st; unsigned int stc;
+    switch (app->conn_status) {
+    case CONN_CONNECTED:  st = "connected";  stc = COL_GREEN; break;
+    case CONN_CONNECTING: st = "connecting"; stc = COL_AMBER; break;
+    case CONN_ERROR:      st = "error";      stc = COL_RED;   break;
+    default:              st = "off";        stc = COL_DIM;   break;
+    }
+    font_drawf(x, y, COL_DIM, 0.72f, "SRV");
+    font_drawf(x + 34, y, COL_TEXT, 0.72f, "%.30s:%d", app->host, app->port);
+    font_drawf(x + 420, y, stc, 0.72f, "%s", st);
+
+    /* --- hardware line: battery, CPU clock, framerate --- */
+    static uint64_t last_t = 0; static int fcount = 0, fps = 0;
+    fcount++;
+    uint64_t now = sceKernelGetProcessTimeWide();
+    if (now - last_t >= 500000) {
+        fps = (int)((uint64_t)fcount * 1000000ull / (now - last_t));
+        fcount = 0; last_t = now;
+    }
+    int bat = scePowerGetBatteryLifePercent();
+    int chg = scePowerIsBatteryCharging();
+    int cpu = scePowerGetArmClockFrequency();
+    unsigned int batc = (bat >= 0 && bat <= 20) ? COL_RED
+                      : (bat <= 40) ? COL_AMBER : COL_GREEN;
+    y += 18;
+    font_drawf(x, y, COL_DIM, 0.72f, "BAT");
+    font_drawf(x + 34, y, batc, 0.72f, "%d%%%s", bat >= 0 ? bat : 0,
+               chg ? " +" : "");
+    font_drawf(x + 150, y, COL_DIM, 0.72f, "CPU");
+    font_drawf(x + 190, y, COL_TEXT, 0.72f, "%dMHz", cpu);
+    font_drawf(x + 330, y, COL_DIM, 0.72f, "FPS");
+    font_drawf(x + 370, y, COL_TEXT, 0.72f, "%d", fps);
+
+    /* --- stream line: buffer depth and underruns (only when connected) --- */
+    y += 18;
+    if (app->conn_status == CONN_CONNECTED) {
+        unsigned jit_ms = (unsigned)(jitter_available(&app->jitter) / 12); /* 12k */
+        font_drawf(x, y, COL_DIM, 0.72f, "BUF");
+        font_drawf(x + 34, y, COL_TEXT, 0.72f, "%ums", jit_ms);
+        font_drawf(x + 150, y, COL_DIM, 0.72f, "UR");
+        font_drawf(x + 190, y, COL_TEXT, 0.72f, "%d", app->audio_underruns);
+        font_drawf(x + 330, y, COL_DIM, 0.72f, "RX");
+        font_drawf(x + 370, y, COL_TEXT, 0.72f, "%ldk",
+                   (long)(app->samples_rx / 1000));
     }
 }
 
 static void draw_slider(int x, int y, int w, const char *label, int val,
                         unsigned int col)
 {
-    vita2d_pgf_draw_textf(s_font, x, y + 12, COL_DIM, 0.8f, "%s", label);
+    font_drawf(x, y + 12, COL_DIM, 0.8f, "%s", label);
     int bx = x + 46, bw = w - 46, bh = 12;
     vita2d_draw_rectangle(bx, y, bw, bh, RGBA8(40, 44, 52, 255));
     vita2d_draw_rectangle(bx, y, bw * val / 100, bh, col);
@@ -210,39 +265,40 @@ static void draw_passband(app_state *app)
 
 void ui_draw(app_state *app)
 {
-    ensure_font();
+    font_ensure();
 
     vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
     wf_render_draw(0, WF_Y, SCREEN_W, WF_H);
     draw_spectrum(app);
     draw_passband(app);
     draw_ruler(app);
+    draw_status_panel(app);
     draw_sliders(app);
     draw_status_bar(app);
 
     /* Band name (from the band plan) over the top-left of the waterfall. */
     const char *band = band_lookup(app->freq_khz);
     if (band[0])
-        vita2d_pgf_draw_textf(s_font, 8, WF_Y + 20, COL_ACCENT, 0.9f,
+        font_drawf(8, WF_Y + 20, COL_ACCENT, 0.9f,
                               "%s", band);
 
     /* Persistent error reason while disconnected in the error state. */
     if (app->conn_status == CONN_ERROR && app->last_err[0]) {
-        vita2d_pgf_draw_textf(s_font, 8, WF_Y + 24, COL_RED, 0.9f,
+        font_drawf(8, WF_Y + 24, COL_RED, 0.9f,
                               "ERR: %s  (Start to retry)", app->last_err);
     }
 
     /* Audio-only receiver: connected with audio but the receiver won't give us
      * the waterfall (one-connection-per-IP limit). Say so over the dead area. */
     if (app->conn_status == CONN_CONNECTED && app->wf_stalled) {
-        vita2d_pgf_draw_textf(s_font, 8, WF_Y + WF_H / 2, COL_AMBER, 0.9f,
+        font_drawf(8, WF_Y + WF_H / 2, COL_AMBER, 0.9f,
                               "Audio only - this receiver isn't sending a waterfall");
     }
 
     if (s_msg_frames > 0) {
         vita2d_draw_rectangle(0, SCREEN_H / 2 - 18, SCREEN_W, 36,
                               RGBA8(0, 0, 0, 200));
-        vita2d_pgf_draw_textf(s_font, 20, SCREEN_H / 2 + 6, COL_TEXT, 1.0f,
+        font_drawf(20, SCREEN_H / 2 + 6, COL_TEXT, 1.0f,
                               "%s", s_msg);
         s_msg_frames--;
     }

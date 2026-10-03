@@ -149,9 +149,20 @@ static int audio_thread(SceSize args, void *argp)
         if (vol < 0) vol = 0;
         if (vol > 100) vol = 100;
 
-        /* Simple fixed gain (volume slider). Deliberately NOT a per-block AGC:
-         * updating gain every ~10 ms modulated speech and sounded metallic. */
+        /* Per-mode make-up gain: AM (and FM) demodulated audio from the KiwiSDR
+         * sits well below SSB level, so without this AM is far too quiet. These
+         * are fixed multipliers (percent), not a per-block AGC, which modulated
+         * speech and sounded metallic. */
+        int mode_mult = 100;
+        switch (s_app->mode[0]) {
+        case 'a': case 'A': mode_mult = 300; break;   /* am / amn / sam */
+        case 'n': case 'N': case 'f': case 'F': mode_mult = 220; break; /* nbfm/fm */
+        default: mode_mult = 100; break;               /* usb/lsb/cw */
+        }
+
+        /* Simple fixed gain (volume slider) x mode make-up. */
         int gain = vol * (AUDIO_GAIN * 256) / 100;
+        gain = gain * mode_mult / 100;
 
         int16_t *out = outbuf[bufidx & 1];
         for (int i = 0; i < OUT_GRAIN; i++) {

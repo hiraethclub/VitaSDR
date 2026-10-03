@@ -32,6 +32,7 @@ static const int  NMODES = (int)(sizeof(MODES) / sizeof(MODES[0]));
 static unsigned int s_prev = 0;
 static double s_accum = 0.0;   /* fractional-step accumulator for analog sweep */
 static int    s_hold = 0;      /* frames a D-pad tune direction has been held */
+static int    s_menu_hold = 0; /* frames a menu Up/Down direction has been held */
 
 static int step_index(int step_hz)
 {
@@ -81,10 +82,20 @@ void input_poll(app_state *app)
     unsigned int b = pad.buttons;
     unsigned int pressed = b & ~s_prev; /* rising edges */
 
-    /* On the picker/settings screens, hand button edges to the menu and skip
-     * all radio controls (including the analog sticks). */
+    /* On the picker/settings/band screens, hand button edges to the menu and
+     * skip all radio controls. Up/Down auto-repeat when held so a long list
+     * scrolls continuously; Left/Right skip (handled in menu_handle). */
     if (app->screen != SCREEN_RADIO) {
-        menu_handle(app, pressed);
+        unsigned int mp = pressed;
+        int md = (b & SCE_CTRL_DOWN) ? 1 : ((b & SCE_CTRL_UP) ? -1 : 0);
+        if (md != 0) {
+            s_menu_hold++;
+            if (s_menu_hold > 18 && (s_menu_hold % 3) == 0)
+                mp |= (md > 0) ? SCE_CTRL_DOWN : SCE_CTRL_UP; /* repeat ~20/s */
+        } else {
+            s_menu_hold = 0;
+        }
+        menu_handle(app, mp);
         s_prev = b;
         return;
     }
@@ -135,16 +146,22 @@ void input_poll(app_state *app)
         s_accum = 0.0;
     }
 
-    /* ---- right stick: volume (X), squelch (Y) ---- */
+    /* ---- right stick: volume (X), squelch (Y), DOMINANT axis only ----
+     * Apply whichever axis is deflected more, so nudging the stick sideways for
+     * volume can't accidentally move squelch (and vice versa). */
     int rx = (int)pad.rx - 128;
-    if (rx > rdead)      { app->volume += 1; }
-    else if (rx < -rdead){ app->volume -= 1; }
+    int ry = (int)pad.ry - 128;
+    int arx = rx < 0 ? -rx : rx;
+    int ary = ry < 0 ? -ry : ry;
+    if (arx >= ary) {
+        if (rx > rdead)      { app->volume += 1; }
+        else if (rx < -rdead){ app->volume -= 1; }
+    } else {
+        if (ry < -rdead)     { app->squelch += 1; }   /* up = increase */
+        else if (ry > rdead) { app->squelch -= 1; }
+    }
     if (app->volume < 0) app->volume = 0;
     if (app->volume > 100) app->volume = 100;
-
-    int ry = (int)pad.ry - 128;
-    if (ry < -rdead)     { app->squelch += 1; }   /* up = increase */
-    else if (ry > rdead) { app->squelch -= 1; }
     if (app->squelch < 0) app->squelch = 0;
     if (app->squelch > 100) app->squelch = 100;
 
