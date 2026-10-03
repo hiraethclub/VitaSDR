@@ -28,4 +28,9 @@ void adpcm_reset(adpcm_state *st);
 size_t adpcm_decode(adpcm_state *st, const uint8_t *in, size_t in_len,
                     int16_t *out);
 
+/* Decode a single 4-bit nibble, advancing the decoder state and returning the
+ * PCM sample. Exposed for streams (OpenWebRX audio) that interleave non-ADPCM
+ * markers between nibbles and so need byte-at-a-time control. */
+int16_t adpcm_decode_nibble(adpcm_state *st, uint8_t nibble);
+
 #endif /* VITASDR_ADPCM_H */
