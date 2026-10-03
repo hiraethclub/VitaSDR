@@ -44,8 +44,12 @@ static int         s_settings_cur = 0;
 static int         s_band_cur = 0;
 
 /* Favourites: user-curated receivers shown at the top of the picker. Stored in
- * VITASDR_DATA_DIR/favourites.txt as "host,port,name" per line. Seeded on first
- * run with a known-good reference so there's always something that connects. */
+ * VITASDR_DATA_DIR/favourites.txt, one per line as
+ *   host,port,proto,path,name
+ * where proto is 0 (KiwiSDR) or 1 (OpenWebRX) and path is the OpenWebRX
+ * WebSocket path. Older 3-field lines ("host,port,name") are still read and
+ * treated as KiwiSDR. Seeded on first run with a known-good reference so
+ * there's always something that connects. */
 #define MAX_FAV 32
 #define FAV_FILE VITASDR_DATA_DIR "/favourites.txt"
 static kiwi_server s_fav[MAX_FAV];
@@ -56,11 +60,13 @@ static void fav_save(void)
     FILE *f = fopen(FAV_FILE, "w");
     if (!f) return;
     for (int i = 0; i < s_nfav; i++)
-        fprintf(f, "%s,%d,%s\n", s_fav[i].host, s_fav[i].port, s_fav[i].name);
+        fprintf(f, "%s,%d,%d,%s,%s\n", s_fav[i].host, s_fav[i].port,
+                s_fav[i].proto, s_fav[i].path, s_fav[i].name);
     fclose(f);
 }
 
-static void fav_add_fields(const char *host, int port, const char *name)
+static void fav_add_full(const char *host, int port, int proto,
+                         const char *path, const char *name)
 {
     if (s_nfav >= MAX_FAV || !host[0]) return;
     kiwi_server *s = &s_fav[s_nfav++];
@@ -68,6 +74,11 @@ static void fav_add_fields(const char *host, int port, const char *name)
     strncpy(s->host, host, sizeof(s->host) - 1);
     strncpy(s->name, name && name[0] ? name : host, sizeof(s->name) - 1);
     s->port = port > 0 ? port : 8073;
+    s->proto = proto;
+    if (path && path[0])
+        strncpy(s->path, path, sizeof(s->path) - 1);
+    else if (proto == PROTO_OWRX)
+        strncpy(s->path, "/ws/", sizeof(s->path) - 1);
     s->snr = -1;
     s->online = 1;
 }
@@ -78,7 +89,8 @@ static void fav_load(void)
     FILE *f = fopen(FAV_FILE, "r");
     if (!f) {
         /* First run: seed with a reliable reference. */
-        fav_add_fields("gw0kax.proxy.kiwisdr.com", 8073, "gw0kax (reference)");
+        fav_add_full("gw0kax.proxy.kiwisdr.com", 8073, PROTO_KIWI, "",
+                     "gw0kax (reference)");
         fav_save();
         return;
     }
@@ -92,7 +104,24 @@ static void fav_load(void)
         char *c2 = strchr(c1 + 1, ',');
         if (!c2) continue;
         *c2 = '\0';
-        fav_add_fields(line, atoi(c1 + 1), c2 + 1);
+        const char *host = line;
+        int port = atoi(c1 + 1);
+        /* The third field distinguishes new (proto: "0"/"1") from old (name).
+         * A favourite name is never a bare "0" or "1", so this is unambiguous. */
+        char *rest = c2 + 1;
+        if ((rest[0] == '0' || rest[0] == '1') &&
+            (rest[1] == ',' || rest[1] == '\0')) {
+            int proto = atoi(rest);
+            char *c3 = strchr(rest, ',');
+            if (!c3) { fav_add_full(host, port, proto, "", host); continue; }
+            *c3 = '\0';
+            char *c4 = strchr(c3 + 1, ',');
+            if (!c4) { fav_add_full(host, port, proto, c3 + 1, host); continue; }
+            *c4 = '\0';
+            fav_add_full(host, port, proto, c3 + 1, c4 + 1);
+        } else {
+            fav_add_full(host, port, PROTO_KIWI, "", rest);  /* legacy 3-field */
+        }
     }
     fclose(f);
 }
@@ -113,7 +142,7 @@ static void fav_toggle(const kiwi_server *s)
         for (int i = idx; i < s_nfav - 1; i++) s_fav[i] = s_fav[i + 1];
         s_nfav--;
     } else {
-        fav_add_fields(s->host, s->port, s->name);
+        fav_add_full(s->host, s->port, s->proto, s->path, s->name);
     }
     fav_save();
 }
@@ -523,28 +552,72 @@ static void picker_connect(app_state *app)
     app->host[sizeof(app->host) - 1] = '\0';
     app->port = s->port;
     app->password[0] = '\0';
+    app->proto = s->proto;
+    app->path[0] = '\0';
+    if (s->proto == PROTO_OWRX)
+        snprintf(app->path, sizeof(app->path), "%s",
+                 s->path[0] ? s->path : "/ws/");
     app->screen = SCREEN_RADIO;
     app->cmd_connect = 1;
     ui_show_message(app, s->name[0] ? s->name : s->host);
     config_save(app);   /* persist chosen host (no in-app quit saves on exit) */
 }
 
-/* Prompt for a host and port and add it to favourites (for receivers not in the
- * public directory, e.g. your own). */
+/* If `in` carries an http/https/ws/wss scheme, parse it as an OpenWebRX URL
+ * (host, port, and the /ws/ endpoint) and return 1. A bare host returns 0.
+ * The OpenWebRX WebSocket endpoint is always /ws/ regardless of the page URL. */
+static int parse_owrx_url(const char *in, char *host, size_t hcap,
+                          int *port, char *path, size_t pcap)
+{
+    const char *p = in;
+    int tls = 0, is_url = 1;
+    if      (strncmp(p, "https://", 8) == 0) { p += 8; tls = 1; }
+    else if (strncmp(p, "wss://",   6) == 0) { p += 6; tls = 1; }
+    else if (strncmp(p, "http://",  7) == 0) { p += 7; tls = 0; }
+    else if (strncmp(p, "ws://",    5) == 0) { p += 5; tls = 0; }
+    else                                     { is_url = 0; }
+    if (!is_url) return 0;
+
+    char hb[128];
+    size_t i = 0;
+    while (*p && *p != '/' && *p != ':' && i + 1 < sizeof(hb)) hb[i++] = *p++;
+    hb[i] = '\0';
+    int pr = tls ? 443 : 80;
+    if (*p == ':') {
+        p++;
+        pr = atoi(p);
+    }
+    snprintf(host, hcap, "%s", hb);
+    *port = pr > 0 ? pr : (tls ? 443 : 80);
+    snprintf(path, pcap, "%s", "/ws/");
+    return 1;
+}
+
+/* Prompt for a receiver and add it to favourites (for receivers not in the
+ * public directory, e.g. your own). A bare hostname is treated as a KiwiSDR
+ * (with a port prompt); an http(s)://host URL is treated as OpenWebRX. */
 static void picker_add_manual(app_state *app)
 {
-    const char *host = ime_get_text("Receiver host (e.g. my.sdr.net)", "");
-    if (!host || !host[0]) return;
-    char hostbuf[96];
-    strncpy(hostbuf, host, sizeof(hostbuf) - 1);
-    hostbuf[sizeof(hostbuf) - 1] = '\0';
-    const char *ports = ime_get_text("Port", "8073");
-    int port = ports ? atoi(ports) : 8073;
-    if (port <= 0) port = 8073;
-    fav_add_fields(hostbuf, port, hostbuf);
+    const char *in = ime_get_text(
+        "Receiver host, or http(s):// URL for OpenWebRX", "");
+    if (!in || !in[0]) return;
+
+    char host[128], path[64];
+    int port = 0, proto = PROTO_KIWI;
+    path[0] = '\0';
+    if (parse_owrx_url(in, host, sizeof(host), &port, path, sizeof(path))) {
+        proto = PROTO_OWRX;
+    } else {
+        snprintf(host, sizeof(host), "%s", in);
+        const char *ports = ime_get_text("Port", "8073");
+        port = ports ? atoi(ports) : 8073;
+        if (port <= 0) port = 8073;
+    }
+    fav_add_full(host, port, proto, path, host);
     fav_save();
     app->sel = 0;   /* new favourite lands at the top */
-    ui_show_message(app, "added to favourites");
+    ui_show_message(app, proto == PROTO_OWRX ? "added OpenWebRX favourite"
+                                             : "added to favourites");
 }
 
 void menu_handle(app_state *app, unsigned int pressed)

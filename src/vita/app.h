@@ -17,6 +17,7 @@
 #include "jitter.h"
 #include "kiwi.h"
 #include "kiwidir.h"
+#include "owrx.h"
 
 #include <psp2/kernel/threadmgr.h>
 
@@ -50,11 +51,16 @@ enum {
 /* Audio bandwidth presets (low-pass corner). */
 enum { AUDIO_BW_NARROW = 0, AUDIO_BW_NORMAL, AUDIO_BW_WIDE };
 
+/* Receiver protocol. Must match kiwi_server.proto (0 = Kiwi, 1 = OpenWebRX). */
+enum { PROTO_KIWI = 0, PROTO_OWRX = 1 };
+
 typedef struct {
     /* ---- server config ---- */
     char   host[128];
     int    port;
     char   password[64];
+    int    proto;        /* PROTO_KIWI or PROTO_OWRX */
+    char   path[64];     /* OpenWebRX WebSocket path (e.g. "/ws/") */
 
     /* ---- tuning / UI state (owned by main thread) ---- */
     double freq_khz;

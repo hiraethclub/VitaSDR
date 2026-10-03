@@ -22,6 +22,12 @@ typedef struct {
     int  users_max;
     int  snr;        /* first value of the "a,b" snr pair; -1 if unknown */
     int  online;     /* status=="active" && offline=="no" */
+    /* Which client speaks to this receiver: 0 = KiwiSDR, 1 = OpenWebRX. Public
+     * directory entries are always KiwiSDR; favourites/manual adds may differ.
+     * `path` is the WebSocket path for OpenWebRX (usually "/ws/"); unused for
+     * KiwiSDR, which builds its own SND/WF paths. */
+    int  proto;
+    char path[64];
 } kiwi_server;
 
 typedef struct {
