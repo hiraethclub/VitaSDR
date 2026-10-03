@@ -41,6 +41,7 @@ typedef struct {
     int      dbg_net_result;     /* last net_recv non-data result; 99 = none */
     uint8_t  dbg_first[32];      /* first bytes seen on the stream */
     unsigned dbg_first_len;
+    char     dbg_resp[160];      /* handshake response status + start of headers */
 } ws_client;
 
 /* ws_connect failure codes (all negative). */

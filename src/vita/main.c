@@ -105,6 +105,8 @@ int net_thread(SceSize args, void *argp)
                     last_ka = last_tune = last_stat = conn_start = now_ms();
                     last_msg_seq = 0;
                     vlog("kiwi_connect OK, audio started");
+                    vlog("SND handshake: rx=%u resp='%s'",
+                         k.ws.dbg_rx_bytes, k.ws.dbg_resp);
                     ui_show_message(&g_app, "connected");
                 } else {
                     const char *why;
@@ -178,9 +180,11 @@ int net_thread(SceSize args, void *argp)
         /* Periodic status so we can see whether audio is actually flowing. */
         if (now_ms() - last_stat >= 2000) {
             last_stat = now_ms();
-            vlog("status: samples=%lu rssi=%.0f jitter=%u",
+            vlog("status: samples=%lu rssi=%.0f jitter=%u rx=%u inlen=%u net=%d msg=%u",
                  k.samples_rx, (double)k.rssi_dbm,
-                 (unsigned)jitter_available(&g_app.jitter));
+                 (unsigned)jitter_available(&g_app.jitter),
+                 k.ws.dbg_rx_bytes, (unsigned)k.ws.in_len,
+                 k.ws.dbg_net_result, k.msg_seq);
         }
 
         if (g_app.cmd_disconnect) {

@@ -220,6 +220,17 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         }
     }
 
+    /* Snapshot the handshake response (status line + first headers) for
+     * diagnostics, with CR/LF flattened to '|' so it logs on one line. */
+    {
+        size_t m = 0;
+        for (; m < sizeof(ws->dbg_resp) - 1 && m < rlen; m++) {
+            char c = resp[m];
+            ws->dbg_resp[m] = (c == '\r' || c == '\n') ? '|' : c;
+        }
+        ws->dbg_resp[m] = '\0';
+    }
+
     /* Any bytes past the header belong to the WebSocket stream; keep them. */
     size_t extra = rlen - (size_t)header_end;
     if (extra > 0 && extra <= WS_INBUF_SIZE) {
