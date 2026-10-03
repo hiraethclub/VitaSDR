@@ -1,7 +1,5 @@
-# Build directories
-/build/
-/build-native/
-/build-vita/
+# Build directories (any build* dir)
+/build*/
 # Vita build artifacts
 *.velf
 *.self
