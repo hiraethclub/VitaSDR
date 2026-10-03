@@ -194,6 +194,23 @@ int net_thread(SceSize args, void *argp)
             continue;
         }
 
+        /* No-response detector: a KiwiSDR with no free channel completes the
+         * WebSocket handshake but then streams nothing (no MSG, no audio). If
+         * we've had neither a control message nor an audio sample within a few
+         * seconds, give up on this receiver and return to the picker so the
+         * user can choose another, instead of sitting silent forever. This is a
+         * deliberate stop, so it does NOT trigger auto-reconnect. */
+        if (k.msg_seq == 0 && k.samples_rx == 0 &&
+            now_ms() - conn_start >= 7000) {
+            vlog("no data 7s after connect (receiver full/declined) -> picker");
+            snprintf(g_app.last_err, sizeof(g_app.last_err),
+                     "no response (receiver full or offline?)");
+            net_disconnect(&k, &connected, 1);
+            g_app.screen = SCREEN_SERVERS;
+            ui_show_message(&g_app, "No response - pick another receiver");
+            continue;
+        }
+
         uint64_t t = now_ms();
         if (t - last_tune >= 150) {
             sceKernelLockMutex(g_app.lock, 1, NULL);

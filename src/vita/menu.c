@@ -64,7 +64,13 @@ static int cmp_srv(const void *a, const void *b)
 {
     const kiwi_server *x = a, *y = b;
     if (x->online != y->online) return y->online - x->online;   /* online first */
-    if (x->snr != y->snr)       return y->snr - x->snr;         /* best SNR first */
+    /* Connectable (has a free channel) before full ones: a full KiwiSDR
+     * completes the handshake but never streams, so surfacing full receivers
+     * first just leads users to dead connections. */
+    int xf = (x->users_max > 0 && x->users < x->users_max) ? 1 : 0;
+    int yf = (y->users_max > 0 && y->users < y->users_max) ? 1 : 0;
+    if (xf != yf) return yf - xf;
+    if (x->snr != y->snr) return y->snr - x->snr;               /* best SNR first */
     return 0;
 }
 
