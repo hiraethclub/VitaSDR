@@ -261,6 +261,9 @@ const char *ime_get_text(const char *title, const char *initial)
     p.supportedLanguages = 0;
     p.languagesForced = SCE_TRUE;
     p.type = SCE_IME_TYPE_DEFAULT;
+    /* Don't auto-capitalise: it mangles hostnames and URLs (e.g. turns
+     * "https://..." into "Https://..."). */
+    p.option = SCE_IME_OPTION_NO_AUTO_CAPITALIZATION;
     p.title = wtitle;
     p.maxTextLength = 120;
     p.initialText = winit;
@@ -593,17 +596,30 @@ static void picker_connect(app_state *app)
 /* If `in` carries an http/https/ws/wss scheme, parse it as an OpenWebRX URL
  * (host, port, and the /ws/ endpoint) and return 1. A bare host returns 0.
  * The OpenWebRX WebSocket endpoint is always /ws/ regardless of the page URL. */
+/* Case-insensitive prefix test (pfx must be lowercase). Returns the matched
+ * length, or 0 if `s` does not start with `pfx`. */
+static int ci_prefix(const char *s, const char *pfx)
+{
+    int i = 0;
+    for (; pfx[i]; i++) {
+        char a = s[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (a != pfx[i]) return 0;
+    }
+    return i;
+}
+
 static int parse_owrx_url(const char *in, char *host, size_t hcap,
                           int *port, int *out_tls, char *path, size_t pcap)
 {
     const char *p = in;
-    int tls = 0, is_url = 1;
-    if      (strncmp(p, "https://", 8) == 0) { p += 8; tls = 1; }
-    else if (strncmp(p, "wss://",   6) == 0) { p += 6; tls = 1; }
-    else if (strncmp(p, "http://",  7) == 0) { p += 7; tls = 0; }
-    else if (strncmp(p, "ws://",    5) == 0) { p += 5; tls = 0; }
-    else                                     { is_url = 0; }
-    if (!is_url) return 0;
+    int tls = 0, n;
+    /* Scheme match is case-insensitive: the IME may capitalise the input. */
+    if      ((n = ci_prefix(p, "https://"))) { p += n; tls = 1; }
+    else if ((n = ci_prefix(p, "wss://")))   { p += n; tls = 1; }
+    else if ((n = ci_prefix(p, "http://")))  { p += n; tls = 0; }
+    else if ((n = ci_prefix(p, "ws://")))    { p += n; tls = 0; }
+    else                                     { return 0; }
 
     char hb[128];
     size_t i = 0;
