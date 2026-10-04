@@ -187,8 +187,10 @@ int net_send_all(int fd, const void *buf, size_t len)
         else if (n < 0 && ((unsigned)n == SCE_NET_ERROR_EAGAIN ||
                            (unsigned)n == SCE_NET_ERROR_EWOULDBLOCK))
             continue;
-        else
+        else {
+            vlog("net_send: sceNetSend err=0x%08X", (unsigned)n);
             return NET_ERR;
+        }
     }
     return 0;
 }
@@ -203,13 +205,17 @@ int net_recv(int fd, void *buf, size_t len, int timeout_ms)
     int n = sceNetRecv(fd, buf, len, 0);
     if (n > 0)
         return n;
-    if (n == 0)
-        return NET_CLOSED;
-    /* EAGAIN / EWOULDBLOCK / ETIMEDOUT => no data within the timeout. */
+    /* EAGAIN / EWOULDBLOCK / ETIMEDOUT => no data within the timeout (common,
+     * not an error). Everything else is logged so a drop names its cause. */
     if ((unsigned)n == SCE_NET_ERROR_EAGAIN ||
         (unsigned)n == SCE_NET_ERROR_EWOULDBLOCK ||
         (unsigned)n == SCE_NET_ERROR_ETIMEDOUT)
         return NET_TIMEOUT;
+    if (n == 0) {
+        vlog("net_recv: sceNetRecv=0 (peer orderly close/FIN)");
+        return NET_CLOSED;
+    }
+    vlog("net_recv: sceNetRecv err=0x%08X", (unsigned)n);
     return NET_ERR;
 }
 

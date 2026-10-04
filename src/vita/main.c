@@ -94,6 +94,7 @@ int net_thread(SceSize args, void *argp)
     int connected = 0;
     int proto = PROTO_KIWI;
     int owrx_adopted = 0;      /* adopted the server's resolved start freq yet */
+    int fail_streak = 0;       /* consecutive no-data failures, for reconnect backoff */
     double last_freq = 0;
     char   last_mode[8] = {0};
     uint64_t last_ka = 0, last_tune = 0, last_stat = 0, conn_start = 0;
@@ -234,9 +235,23 @@ int net_thread(SceSize args, void *argp)
             if (nf == 0)
                 hex[0] = '\0';
             vlog("first %u bytes: %s | %s", nf, hex, asc);
+            int had_data = (samples_rx > 0);
             net_disconnect(proto, &k, &o, &connected, 1);
             if (g_app.auto_reconnect && g_app.host[0]) {
-                sceKernelDelayThread(3000 * 1000);   /* back off, then retry */
+                /* A connection that actually delivered data then dropped is a
+                 * transient: reconnect quickly so the gap is short. Repeated
+                 * immediate failures back off (0.5,1,2,4,8s) so we don't storm
+                 * the server, which can itself provoke refused connections. */
+                int backoff_ms;
+                if (had_data) {
+                    fail_streak = 0;
+                    backoff_ms = 500;
+                } else {
+                    int sh = fail_streak < 4 ? fail_streak : 4;
+                    backoff_ms = 500 * (1 << sh);
+                    fail_streak++;
+                }
+                sceKernelDelayThread((SceUInt)backoff_ms * 1000);
                 if (g_app.running && !g_app.cmd_disconnect)
                     g_app.cmd_connect = 1;
             }
@@ -292,13 +307,17 @@ int net_thread(SceSize args, void *argp)
             sceKernelUnlockMutex(g_app.lock, 1);
 
             if (f != last_freq) {
-                if (proto == PROTO_OWRX) owrx_set_frequency(&o, f);
-                else                     kiwi_set_frequency(&k, f);
+                int sr;
+                if (proto == PROTO_OWRX) sr = owrx_set_frequency(&o, f);
+                else                     sr = kiwi_set_frequency(&k, f);
+                vlog("retune -> %.3f kHz (send rc=%d)", f, sr);
                 last_freq = f;
             }
             if (strcmp(m, last_mode) != 0) {
-                if (proto == PROTO_OWRX) owrx_set_mode(&o, m);
-                else                     kiwi_set_mode(&k, m, 0, 0);
+                int sr;
+                if (proto == PROTO_OWRX) sr = owrx_set_mode(&o, m);
+                else                     sr = kiwi_set_mode(&k, m, 0, 0);
+                vlog("setmode -> %s (send rc=%d)", m, sr);
                 strncpy(last_mode, m, sizeof(last_mode));
             }
             last_tune = t;
