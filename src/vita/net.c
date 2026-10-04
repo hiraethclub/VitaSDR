@@ -173,6 +173,12 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
     int one = 1;
     sceNetSetsockopt(sock, SCE_NET_IPPROTO_TCP, SCE_NET_TCP_NODELAY, &one,
                      sizeof(one));
+    /* Enlarge the receive buffer so a burst from a fast server (OpenWebRX
+     * pushes FFT + audio continuously) is absorbed rather than stalling the
+     * socket while we are mid-send. */
+    int rcvbuf = 256 * 1024;
+    sceNetSetsockopt(sock, SCE_NET_SOL_SOCKET, SCE_NET_SO_RCVBUF, &rcvbuf,
+                     sizeof(rcvbuf));
     return sock;
 }
 

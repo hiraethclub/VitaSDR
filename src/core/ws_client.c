@@ -329,11 +329,23 @@ static int ws_send_frame(ws_client *ws, int opcode, const void *data,
         hdr[h++] = mask[i];
     }
 
+    const uint8_t *p = (const uint8_t *)data;
+
+    /* Small frames (all our control messages: handshake, tuning, keepalive) go
+     * as ONE write so the header and payload land in a single TCP segment.
+     * Sending the tiny header as its own segment (TCP_NODELAY is on) ahead of
+     * the payload was a plausible trigger for mid-stream drops on the Vita. */
+    if (len + h <= 2048) {
+        uint8_t frame[2048 + 14];
+        memcpy(frame, hdr, h);
+        for (size_t i = 0; i < len; i++)
+            frame[h + i] = (uint8_t)(p[i] ^ mask[i & 3]);
+        return ws_raw_send(ws, frame, h + len);
+    }
+
+    /* Large frames (not produced by this client) still go header-then-chunks. */
     if (ws_raw_send(ws, hdr, h) != 0)
         return -1;
-
-    /* Send the payload masked, in chunks so we never need a big temp buffer. */
-    const uint8_t *p = (const uint8_t *)data;
     uint8_t chunk[1024];
     size_t off = 0;
     while (off < len) {
