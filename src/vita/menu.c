@@ -60,12 +60,12 @@ static void fav_save(void)
     FILE *f = fopen(FAV_FILE, "w");
     if (!f) return;
     for (int i = 0; i < s_nfav; i++)
-        fprintf(f, "%s,%d,%d,%s,%s\n", s_fav[i].host, s_fav[i].port,
-                s_fav[i].proto, s_fav[i].path, s_fav[i].name);
+        fprintf(f, "%s,%d,%d,%d,%s,%s\n", s_fav[i].host, s_fav[i].port,
+                s_fav[i].proto, s_fav[i].tls, s_fav[i].path, s_fav[i].name);
     fclose(f);
 }
 
-static void fav_add_full(const char *host, int port, int proto,
+static void fav_add_full(const char *host, int port, int proto, int tls,
                          const char *path, const char *name)
 {
     if (s_nfav >= MAX_FAV || !host[0]) return;
@@ -75,6 +75,7 @@ static void fav_add_full(const char *host, int port, int proto,
     strncpy(s->name, name && name[0] ? name : host, sizeof(s->name) - 1);
     s->port = port > 0 ? port : 8073;
     s->proto = proto;
+    s->tls = tls;
     if (path && path[0])
         strncpy(s->path, path, sizeof(s->path) - 1);
     else if (proto == PROTO_OWRX)
@@ -83,13 +84,23 @@ static void fav_add_full(const char *host, int port, int proto,
     s->online = 1;
 }
 
+/* Is `s` a bare integer field ("0"/"1"...) terminated by a comma or the end of
+ * the line? Used to tell the "host,port,proto,tls,path,name" format from a
+ * legacy "host,port,name" line (a name is never a bare integer field). */
+static int is_int_field(const char *s)
+{
+    if (*s < '0' || *s > '9') return 0;
+    while (*s >= '0' && *s <= '9') s++;
+    return (*s == ',' || *s == '\0');
+}
+
 static void fav_load(void)
 {
     s_nfav = 0;
     FILE *f = fopen(FAV_FILE, "r");
     if (!f) {
         /* First run: seed with a reliable reference. */
-        fav_add_full("gw0kax.proxy.kiwisdr.com", 8073, PROTO_KIWI, "",
+        fav_add_full("gw0kax.proxy.kiwisdr.com", 8073, PROTO_KIWI, 0, "",
                      "gw0kax (reference)");
         fav_save();
         return;
@@ -106,22 +117,29 @@ static void fav_load(void)
         *c2 = '\0';
         const char *host = line;
         int port = atoi(c1 + 1);
-        /* The third field distinguishes new (proto: "0"/"1") from old (name).
-         * A favourite name is never a bare "0" or "1", so this is unambiguous. */
-        char *rest = c2 + 1;
-        if ((rest[0] == '0' || rest[0] == '1') &&
-            (rest[1] == ',' || rest[1] == '\0')) {
-            int proto = atoi(rest);
-            char *c3 = strchr(rest, ',');
-            if (!c3) { fav_add_full(host, port, proto, "", host); continue; }
-            *c3 = '\0';
-            char *c4 = strchr(c3 + 1, ',');
-            if (!c4) { fav_add_full(host, port, proto, c3 + 1, host); continue; }
-            *c4 = '\0';
-            fav_add_full(host, port, proto, c3 + 1, c4 + 1);
-        } else {
-            fav_add_full(host, port, PROTO_KIWI, "", rest);  /* legacy 3-field */
+        char *rest = c2 + 1;   /* "proto,tls,path,name" or a legacy bare name */
+        if (!is_int_field(rest)) {
+            fav_add_full(host, port, PROTO_KIWI, 0, "", rest); /* legacy 3-field */
+            continue;
         }
+        int proto = atoi(rest);
+        char *c3 = strchr(rest, ',');
+        if (!c3) { fav_add_full(host, port, proto, 0, "", host); continue; }
+        char *tlsf = c3 + 1;
+        int tls = 0;
+        char *pathf;
+        if (is_int_field(tlsf)) {
+            tls = atoi(tlsf);
+            char *c4 = strchr(tlsf, ',');
+            pathf = c4 ? c4 + 1 : NULL;
+        } else {
+            pathf = tlsf;      /* tolerate an interim line without the tls field */
+        }
+        if (!pathf) { fav_add_full(host, port, proto, tls, "", host); continue; }
+        char *c5 = strchr(pathf, ',');
+        if (!c5) { fav_add_full(host, port, proto, tls, pathf, host); continue; }
+        *c5 = '\0';
+        fav_add_full(host, port, proto, tls, pathf, c5 + 1);
     }
     fclose(f);
 }
@@ -142,7 +160,7 @@ static void fav_toggle(const kiwi_server *s)
         for (int i = idx; i < s_nfav - 1; i++) s_fav[i] = s_fav[i + 1];
         s_nfav--;
     } else {
-        fav_add_full(s->host, s->port, s->proto, s->path, s->name);
+        fav_add_full(s->host, s->port, s->proto, s->tls, s->path, s->name);
     }
     fav_save();
 }
@@ -353,6 +371,7 @@ enum {
     SET_SQUELCH,
     SET_AUTOCONNECT,
     SET_AUTORECONNECT,
+    SET_TLSVERIFY,
     SET_STEP,
     SET_ZOOM,
     SET_FREQENTRY,
@@ -383,6 +402,7 @@ static void setting_value(app_state *app, int item, char *out, size_t n)
     case SET_SQUELCH:     snprintf(out, n, "%d", app->squelch); break;
     case SET_AUTOCONNECT: snprintf(out, n, "%s", ONOFF[app->auto_connect ? 1 : 0]); break;
     case SET_AUTORECONNECT: snprintf(out, n, "%s", ONOFF[app->auto_reconnect ? 1 : 0]); break;
+    case SET_TLSVERIFY:   snprintf(out, n, "%s", ONOFF[app->tls_verify ? 1 : 0]); break;
     case SET_STEP:        step_label(app->step_hz, tmp, sizeof(tmp));
                           snprintf(out, n, "%s", tmp); break;
     case SET_ZOOM:        snprintf(out, n, "%d", app->zoom); break;
@@ -402,6 +422,7 @@ static const char *SET_LABELS[SET_COUNT] = {
     "Squelch",
     "Auto-connect on launch",
     "Auto-reconnect on drop",
+    "Verify TLS certificate",
     "Tuning step",
     "Waterfall zoom",
     "Direct frequency entry",
@@ -506,6 +527,7 @@ static void settings_change(app_state *app, int item, int dir)
     case SET_SQUELCH:       adjust(&app->squelch, dir * 5, 0, 100); break;
     case SET_AUTOCONNECT:   app->auto_connect = !app->auto_connect; break;
     case SET_AUTORECONNECT: app->auto_reconnect = !app->auto_reconnect; break;
+    case SET_TLSVERIFY:     app->tls_verify = !app->tls_verify; break;
     case SET_STEP: {
         int idx = 2;
         for (int i = 0; i < NSTEPS; i++) if (STEPS[i] == app->step_hz) idx = i;
@@ -553,6 +575,7 @@ static void picker_connect(app_state *app)
     app->port = s->port;
     app->password[0] = '\0';
     app->proto = s->proto;
+    app->tls = s->tls;
     app->path[0] = '\0';
     if (s->proto == PROTO_OWRX)
         snprintf(app->path, sizeof(app->path), "%s",
@@ -567,7 +590,7 @@ static void picker_connect(app_state *app)
  * (host, port, and the /ws/ endpoint) and return 1. A bare host returns 0.
  * The OpenWebRX WebSocket endpoint is always /ws/ regardless of the page URL. */
 static int parse_owrx_url(const char *in, char *host, size_t hcap,
-                          int *port, char *path, size_t pcap)
+                          int *port, int *out_tls, char *path, size_t pcap)
 {
     const char *p = in;
     int tls = 0, is_url = 1;
@@ -589,6 +612,7 @@ static int parse_owrx_url(const char *in, char *host, size_t hcap,
     }
     snprintf(host, hcap, "%s", hb);
     *port = pr > 0 ? pr : (tls ? 443 : 80);
+    *out_tls = tls;
     snprintf(path, pcap, "%s", "/ws/");
     return 1;
 }
@@ -603,9 +627,9 @@ static void picker_add_manual(app_state *app)
     if (!in || !in[0]) return;
 
     char host[128], path[64];
-    int port = 0, proto = PROTO_KIWI;
+    int port = 0, proto = PROTO_KIWI, tls = 0;
     path[0] = '\0';
-    if (parse_owrx_url(in, host, sizeof(host), &port, path, sizeof(path))) {
+    if (parse_owrx_url(in, host, sizeof(host), &port, &tls, path, sizeof(path))) {
         proto = PROTO_OWRX;
     } else {
         snprintf(host, sizeof(host), "%s", in);
@@ -613,7 +637,7 @@ static void picker_add_manual(app_state *app)
         port = ports ? atoi(ports) : 8073;
         if (port <= 0) port = 8073;
     }
-    fav_add_full(host, port, proto, path, host);
+    fav_add_full(host, port, proto, tls, path, host);
     fav_save();
     app->sel = 0;   /* new favourite lands at the top */
     ui_show_message(app, proto == PROTO_OWRX ? "added OpenWebRX favourite"

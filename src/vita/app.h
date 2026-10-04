@@ -61,6 +61,8 @@ typedef struct {
     char   password[64];
     int    proto;        /* PROTO_KIWI or PROTO_OWRX */
     char   path[64];     /* OpenWebRX WebSocket path (e.g. "/ws/") */
+    int    tls;          /* current server uses wss:// (TLS) */
+    int    tls_verify;   /* validate TLS certs against the bundled CA set */
 
     /* ---- tuning / UI state (owned by main thread) ---- */
     double freq_khz;

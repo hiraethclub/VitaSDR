@@ -37,7 +37,19 @@ set(CORE_SOURCES
     src/core/resamp.c
     src/core/httpget.c
     src/core/kiwidir.c
-    src/core/owrx.c)
+    src/core/owrx.c
+    src/core/tls.c
+    src/core/ca_bundle.c)
+
+## Vendored BearSSL (TLS for OpenWebRX over wss://). Built as a static library
+## so the linker pulls in only the object files actually referenced. Third-party
+## code, so warnings are silenced (-w) to keep our own build warning-clean.
+file(GLOB_RECURSE BEARSSL_SOURCES CONFIGURE_DEPENDS third_party/bearssl/src/*.c)
+add_library(bearssl STATIC ${BEARSSL_SOURCES})
+target_include_directories(bearssl
+    PUBLIC  third_party/bearssl/inc
+    PRIVATE third_party/bearssl/src)
+target_compile_options(bearssl PRIVATE -w -O2)
 
 if(VITA)
   ## ---------------- Vita VPK build ----------------
@@ -100,6 +112,7 @@ if(VITA)
       VITASDR_APP_LABEL="${VITA_APP_NAME}")
 
   target_link_libraries(${PROJECT_NAME}
+      bearssl
       vita2d
       SceNet_stub
       SceNetCtl_stub
@@ -159,7 +172,7 @@ else()
   target_include_directories(vitasdr_test PRIVATE src/core)
 
   find_package(Threads REQUIRED)
-  target_link_libraries(vitasdr_test Threads::Threads m)
+  target_link_libraries(vitasdr_test bearssl Threads::Threads m)
 
   enable_testing()
   add_test(NAME core COMMAND vitasdr_test)

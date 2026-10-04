@@ -115,6 +115,7 @@ int net_thread(SceSize args, void *argp)
                 if (proto == PROTO_OWRX)
                     rc = owrx_connect(&o, g_app.host, g_app.port,
                                       g_app.path[0] ? g_app.path : "/ws/",
+                                      g_app.tls, g_app.tls_verify,
                                       &g_app.jitter, f, m, 6000);
                 else
                     rc = kiwi_connect(&k, g_app.host, g_app.port,
@@ -149,6 +150,7 @@ int net_thread(SceSize args, void *argp)
                     case WS_CONNECT_ENORESP: why = "no HTTP response"; break;
                     case WS_CONNECT_ESTATUS: why = "not a websocket (bad HTTP status)"; break;
                     case WS_CONNECT_EACCEPT: why = "bad ws accept key"; break;
+                    case WS_CONNECT_ETLS:    why = "TLS handshake failed"; break;
                     case -6:                 why = "handshake send failed"; break;
                     default:                 why = "connect failed"; break;
                     }

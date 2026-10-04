@@ -30,8 +30,11 @@ enum {
     WS_ERROR = -1   /* connection closed or protocol error */
 };
 
+struct tls_session;             /* opaque; non-NULL when the link runs over TLS */
+
 typedef struct {
     int      fd;                 /* transport handle, <0 when not connected */
+    struct tls_session *tls;     /* TLS session, or NULL for a plain ws:// link */
     uint8_t  in[WS_INBUF_SIZE];  /* buffered bytes from the socket */
     size_t   in_len;             /* valid bytes in `in` */
 
@@ -51,13 +54,20 @@ enum {
     WS_CONNECT_ESEND     = -2, /* failed to send the upgrade request */
     WS_CONNECT_ENORESP   = -3, /* no/incomplete HTTP response */
     WS_CONNECT_ESTATUS   = -4, /* response was not HTTP 101 Switching Protocols */
-    WS_CONNECT_EACCEPT   = -5  /* Sec-WebSocket-Accept mismatch */
+    WS_CONNECT_EACCEPT   = -5, /* Sec-WebSocket-Accept mismatch */
+    WS_CONNECT_ETLS      = -7  /* TLS handshake failed (wss:// only) */
 };
 
 /* Connect to ws://host:port/path and complete the WebSocket handshake.
  * `origin` may be NULL. Returns 0 on success, or a negative WS_CONNECT_* code. */
 int ws_connect(ws_client *ws, const char *host, int port, const char *path,
                const char *origin, int timeout_ms);
+
+/* As ws_connect, but if `tls` is nonzero the link runs over TLS (wss://): a TLS
+ * handshake is performed before the WebSocket upgrade, and `host` is used for
+ * SNI. `verify` selects certificate validation against the bundled CA set. */
+int ws_connect_ex(ws_client *ws, const char *host, int port, const char *path,
+                  const char *origin, int tls, int verify, int timeout_ms);
 
 /* Send a NUL-terminated text message. Returns 0 on success, <0 on error. */
 int ws_send_text(ws_client *ws, const char *text);

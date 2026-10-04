@@ -41,6 +41,8 @@ void config_defaults(app_state *app)
     app->password[0] = '\0';
     app->proto = PROTO_KIWI;
     app->path[0] = '\0';
+    app->tls = 0;
+    app->tls_verify = 1;   /* verify certificates by default; toggle in Settings */
     app->freq_khz = 7074.0;      /* 40m, 7.074 MHz */
     strncpy(app->mode, "usb", sizeof(app->mode) - 1);
     app->step_hz = 100;
@@ -80,6 +82,8 @@ int config_save(const app_state *app)
         "password=%s\n"
         "proto=%d\n"
         "path=%s\n"
+        "tls=%d\n"
+        "tls_verify=%d\n"
         "freq_khz=%.3f\n"
         "mode=%s\n"
         "step_hz=%d\n"
@@ -93,6 +97,7 @@ int config_save(const app_state *app)
         "auto_reconnect=%d\n"
         "keep_awake=%d\n",
         app->host, app->port, app->password, app->proto, app->path,
+        app->tls, app->tls_verify,
         app->freq_khz, app->mode,
         app->step_hz, app->zoom, app->volume, app->squelch, app->palette,
         app->wf_speed, app->audio_bw, app->auto_connect, app->auto_reconnect,
@@ -142,6 +147,10 @@ int config_load(app_state *app)
             app->proto = atoi(val);
         else if (strcmp(key, "path") == 0)
             strncpy(app->path, val, sizeof(app->path) - 1);
+        else if (strcmp(key, "tls") == 0)
+            app->tls = atoi(val);
+        else if (strcmp(key, "tls_verify") == 0)
+            app->tls_verify = atoi(val);
         else if (strcmp(key, "freq_khz") == 0)
             app->freq_khz = atof(val);
         else if (strcmp(key, "mode") == 0)
@@ -187,6 +196,7 @@ int config_load(app_state *app)
             app->port = DEFAULT_PORT;
         app->proto = PROTO_KIWI;   /* shipped defaults are all KiwiSDR */
         app->path[0] = '\0';
+        app->tls = 0;
         config_save(app);
     }
     return 0;

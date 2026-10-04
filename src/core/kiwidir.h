@@ -28,6 +28,7 @@ typedef struct {
      * KiwiSDR, which builds its own SND/WF paths. */
     int  proto;
     char path[64];
+    int  tls;        /* OpenWebRX over wss:// (https); 0 for plain ws:// */
 } kiwi_server;
 
 typedef struct {

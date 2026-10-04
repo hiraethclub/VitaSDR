@@ -378,8 +378,8 @@ int owrx_handle_binary(owrx_client *o, const unsigned char *frame, size_t len)
 /* ---------------- public API ---------------- */
 
 int owrx_connect(owrx_client *o, const char *host, int port, const char *path,
-                 jitter_buf *sink, double freq_khz, const char *mode,
-                 int timeout_ms)
+                 int tls, int verify, jitter_buf *sink, double freq_khz,
+                 const char *mode, int timeout_ms)
 {
     memset(o, 0, sizeof(*o));
     o->sink = sink;
@@ -391,7 +391,7 @@ int owrx_connect(owrx_client *o, const char *host, int port, const char *path,
     adpcm_reset(&o->fft_adpcm);
 
     const char *p = (path && path[0]) ? path : "/ws/";
-    int rc = ws_connect(&o->ws, host, port, p, NULL, timeout_ms);
+    int rc = ws_connect_ex(&o->ws, host, port, p, NULL, tls, verify, timeout_ms);
     if (rc != WS_CONNECT_OK) {
         o->ws.fd = -1;
         return rc;

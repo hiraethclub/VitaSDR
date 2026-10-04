@@ -107,10 +107,11 @@ typedef struct {
  * WebSocket upgrade, and send the OpenWebRX handshake. `sink` receives decoded
  * audio. `freq_khz`/`mode` are the desired initial tuning; the actual start
  * frequency is resolved once config arrives (see owrx_poll). Returns 0 on
- * success, or a negative WS_CONNECT_* code. */
+ * success, or a negative WS_CONNECT_* code. `tls` runs the link over wss://
+ * (OpenWebRX behind HTTPS); `verify` validates the server certificate. */
 int owrx_connect(owrx_client *o, const char *host, int port, const char *path,
-                 jitter_buf *sink, double freq_khz, const char *mode,
-                 int timeout_ms);
+                 int tls, int verify, jitter_buf *sink, double freq_khz,
+                 const char *mode, int timeout_ms);
 
 /* Process at most one incoming frame, waiting up to timeout_ms. Drives the
  * handshake, starts the DSP once config is known, and routes audio/FFT frames.
