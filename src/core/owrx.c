@@ -126,7 +126,13 @@ static void owrx_maybe_start(owrx_client *o)
     double lim = o->samp_rate * 0.45;
     double reqoff = o->freq_khz * 1000.0 - o->center_freq;
     if (reqoff > lim || reqoff < -lim) {
-        double base = o->center_freq + (o->have_start_offset ? o->start_offset : 0.0);
+        double base;
+        if (o->have_start_offset)
+            base = o->center_freq + o->start_offset;
+        else if (o->have_start_abs)
+            base = o->start_freq_abs;        /* absolute start_freq */
+        else
+            base = o->center_freq;           /* fall back to band centre */
         o->freq_khz = base / 1000.0;
     }
 
@@ -155,6 +161,11 @@ static void owrx_handle_config(owrx_client *o, const char *body)
     if (owrx_json_number(body, "fft_size", &v))    o->fft_size    = (int)v;
     if (owrx_json_number(body, "start_offset_freq", &v)) {
         o->start_offset = v; o->have_start_offset = 1;
+    }
+    /* Some servers send an absolute start_freq instead of an offset; keep it to
+     * derive the offset once the centre frequency is known. */
+    if (owrx_json_number(body, "start_freq", &v)) {
+        o->start_freq_abs = v; o->have_start_abs = 1;
     }
     if (owrx_json_string(body, "audio_compression", s, sizeof(s)))
         o->audio_adpcm_on = (strcmp(s, "adpcm") == 0);

@@ -269,10 +269,13 @@ int net_thread(SceSize args, void *argp)
          * WebSocket handshake but then streams nothing. If we've had neither a
          * control message nor an audio sample within a few seconds, give up and
          * return to the picker rather than sit silent forever. A deliberate
-         * stop, so it does NOT trigger auto-reconnect. */
+         * stop, so it does NOT trigger auto-reconnect. OpenWebRX starts its SDR
+         * source on demand, which can take several seconds cold, so give it a
+         * longer grace period than a (full) KiwiSDR. */
+        uint64_t no_data_ms = (proto == PROTO_OWRX) ? 15000 : 7000;
         if (msg_seq == 0 && samples_rx == 0 &&
-            now_ms() - conn_start >= 7000) {
-            vlog("no data 7s after connect (receiver full/declined) -> picker");
+            now_ms() - conn_start >= no_data_ms) {
+            vlog("no data after connect (receiver full/declined/cold) -> picker");
             snprintf(g_app.last_err, sizeof(g_app.last_err),
                      "no response (receiver full or offline?)");
             net_disconnect(proto, &k, &o, &connected, 1);

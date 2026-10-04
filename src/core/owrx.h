@@ -75,6 +75,8 @@ typedef struct {
     int    fft_adpcm_on;       /* fft_compression == "adpcm" */
     double start_offset;       /* start_offset_freq from config (Hz) */
     int    have_start_offset;
+    double start_freq_abs;     /* start_freq from config (absolute Hz) */
+    int    have_start_abs;
 
     /* ---- streaming SYNC state for the audio ADPCM decoder ---- */
     int    sync_match;         /* bytes of "SYNC" matched (0..4) */
