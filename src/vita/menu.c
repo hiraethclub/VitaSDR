@@ -14,6 +14,7 @@
 #include <psp2/ctrl.h>
 #include <psp2/ime_dialog.h>
 #include <psp2/common_dialog.h>
+#include <psp2/display.h>
 #include <psp2/kernel/threadmgr.h>
 
 #include <vita2d.h>
@@ -274,8 +275,11 @@ const char *ime_get_text(const char *title, const char *initial)
         vita2d_start_drawing();
         vita2d_clear_screen();
         vita2d_end_drawing();
+        /* Composite the IME dialog over our (cleared) frame. Without this the
+         * dialog never draws and its status never advances: a black screen. */
+        vita2d_common_dialog_update();
         vita2d_swap_buffers();
-        sceKernelDelayThread(2000);
+        sceDisplayWaitVblankStart();
     }
 
     SceImeDialogResult res;

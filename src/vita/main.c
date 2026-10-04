@@ -16,6 +16,8 @@
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/common_dialog.h>
+#include <psp2/system_param.h>
 
 #include <vita2d.h>
 
@@ -468,6 +470,18 @@ int main(int argc, char *argv[])
 
     vita2d_init();
     vita2d_set_clear_color(RGBA8(10, 12, 16, 255));
+
+    /* Common-dialog subsystem must be configured once before any system dialog
+     * (the IME on-screen keyboard used by the server picker's manual add).
+     * Without this the IME never composites and the screen just goes black. */
+    {
+        SceCommonDialogConfigParam cfg;
+        sceCommonDialogConfigParamInit(&cfg);
+        cfg.language = SCE_SYSTEM_PARAM_LANG_ENGLISH_US;
+        cfg.enterButtonAssign = SCE_SYSTEM_PARAM_ENTER_BUTTON_CROSS;
+        sceCommonDialogSetConfigParam(&cfg);
+    }
+
     wf_render_init();
     font_ensure();
     input_init();
