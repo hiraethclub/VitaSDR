@@ -61,8 +61,11 @@ src/
   core/            # portable, no Vita headers, gcc-buildable on Linux
     net.h          # transport interface the core is written against
     net_posix.c    # BSD-socket impl of net.h (native test build only)
-    ws_client.c    # RFC 6455 websocket client (handshake, masked frames)
+    ws_client.c    # RFC 6455 websocket client (handshake, masked frames; TLS via tls.c)
+    tls.c          # TLS client (BearSSL) over net.h, for wss:// (OpenWebRX)
+    ca_bundle.c    # generated CA trust anchors (tools/gen_ca.c); used by tls.c
     kiwi.c         # KiwiSDR protocol: SND (audio) + W/F (waterfall)
+    owrx.c         # OpenWebRX/OpenWebRX+ protocol: one socket, audio + FFT
     adpcm.c        # IMA-ADPCM decoder (reset on new stream)
     jitter.c       # bounded audio jitter buffer, drop-oldest on overflow
   vita/            # Vita-specific layer (SCE calls live here only)
@@ -76,11 +79,17 @@ src/
     main.c         # entry point, threads (net/wf/audio), render loop
 test/
   test_core.c      # native unit tests for the core
+tools/
+  gen_ca.c         # host-only: PEM CA bundle -> src/core/ca_bundle.c
+third_party/
+  bearssl/         # vendored BearSSL (TLS); built as a static lib by CMake
 ```
 
 The core never calls sockets directly; it calls `net.h`. `net_posix.c`
 (tests) and `vita/net.c` (device) both implement that interface, so protocol
-code is platform-agnostic and testable on the host.
+code is platform-agnostic and testable on the host. `tls.c` layers TLS on top
+of the same `net.h` fd, so wss:// is testable on the host too (it needs no SCE
+calls); only `vita/net.c` is device-specific.
 
 ## Protocols
 
@@ -108,26 +117,48 @@ Corrected from the reference client (jks-prv/kiwiclient); the original brief's
 - Keepalive: `SET keepalive` on each connection about once per second.
 - Retune: `SET mod=... freq=<kHz>`; recenter waterfall: `SET zoom=z cf=<kHz>`.
 
-### OpenWebRX/OpenWebRX+ (planned next; protocol researched)
+### OpenWebRX/OpenWebRX+ (implemented; `core/owrx.c`)
 
-One WebSocket carries everything (unlike KiwiSDR's two). Sequence, from the
-reference client (jketterl/openwebrx htdocs/openwebrx.js):
+One WebSocket carries everything (unlike KiwiSDR's two), so `owrx.c` decodes
+both audio and the FFT and the (KiwiSDR-only) `wf_thread` stays idle. Confirmed
+against a live OpenWebRX v1.2.x server, not just the reference client:
 
-- Connect to `ws://host:port/ws/`, binaryType arraybuffer.
-- On open the client sends TEXT `SERVER DE CLIENT client=openwebrx.js type=receiver`,
-  then JSON `{"type":"connectionproperties","params":{"output_rate":N,"hd_output_rate":N}}`.
-- Server greets TEXT `CLIENT DE SERVER server=openwebrx version=...` then JSON
-  `{"type":"config","value":{...}}` with `samp_rate`, `center_freq`, `fft_size`,
-  `audio_compression` ("adpcm" or none), `fft_compression` ("adpcm" or none),
-  `start_mod`, `start_offset_freq`.
-- Client selects/starts DSP and tunes via JSON `dspcontrol` messages
-  (`set_offset_frequency`, `mod`, etc.) — exact set still to be confirmed.
-- Binary frames are tagged by a leading type byte (1=FFT/waterfall, 2=audio);
-  audio is IMA-ADPCM when `audio_compression=="adpcm"` (our decoder applies),
-  otherwise raw. FFT likewise.
+- Connect to `ws(s)://host:port/ws/`. Client sends TEXT
+  `SERVER DE CLIENT client=vitasdr type=receiver`, then JSON
+  `{"type":"connectionproperties","params":{"output_rate":12000,"hd_output_rate":12000}}`.
+  Forcing both rates to 12000 keeps every mode (incl. wideband FM) at mono
+  12 kHz, matching the KiwiSDR audio pipeline exactly.
+- Server greets TEXT `CLIENT DE SERVER server=openwebrx version=...` then sends
+  `{"type":"config","value":{...}}` **across several partial messages** (we
+  accumulate `samp_rate`, `center_freq`, `fft_size`, `audio_compression`,
+  `fft_compression`, `start_mod`, `start_offset_freq`).
+- Once `center_freq`+`samp_rate` are known we start the DSP:
+  `{"type":"dspcontrol","action":"start"}` then
+  `{"type":"dspcontrol","params":{"mod":..,"offset_freq":..,"low_cut":..,"high_cut":..,"squelch_level":-150}}`.
+  Tuning is by OFFSET from the SDR's fixed centre, clamped to ±0.45·samp_rate;
+  retune/mode changes re-send the changed params. If the requested frequency is
+  outside the window we adopt the server's start frequency.
+- Binary frames: leading type byte — 1 = FFT/waterfall, 2 = audio, 4 = HD audio
+  (wideband FM lands here; identical codec). Audio is a CONTINUOUS IMA-ADPCM
+  stream with embedded `"SYNC"` + two LE int16 (step index, predictor) markers
+  every ~1000 bytes; `owrx.c` has a streaming state machine that resyncs even
+  when a marker straddles a WebSocket message. FFT is reset-per-frame ADPCM
+  with 10 lead-in pad samples dropped (value/100 = dB), decimated peak-wise to
+  1024 waterfall bins. Both honour the `*_compression` flags (raw fallback).
 
-Each saved server/favourite will carry a protocol tag (Kiwi vs OpenWebRX) so the
-connection layer picks the right client. Not yet implemented.
+Each saved server/favourite carries a protocol tag (Kiwi vs OpenWebRX), a TLS
+flag, and the `/ws/` path; the connection layer picks the right client.
+
+### TLS (wss://) — `core/tls.c`, vendored BearSSL
+
+OpenWebRX is usually behind HTTPS. `tls.c` is a single static (no-heap) TLS
+session driving BearSSL over a connected `net.h` fd; `tls_recv()` returns
+net_recv's own sentinels so the net thread treats a TLS stream like a plain
+one. `ws_connect_ex(tls, verify)` brings TLS up before the HTTP upgrade.
+Certificate verification is on by default (bundled CA anchors in
+`ca_bundle.c`) with a Settings toggle to turn it off — the escape hatch for a
+device whose clock breaks date validation. BearSSL (`third_party/bearssl`) is
+built as a static lib; nothing extra to install.
 
 ## UI layout (960x544)
 
@@ -192,10 +223,18 @@ Milestone 1 reached and shaken out on real hardware (PCH-1000): the app
 connects to a KiwiSDR, decodes and plays IMA-ADPCM audio, tunes, shows a live
 S-meter, and renders a waterfall.
 
-**Verified on the host** (native `vitasdr_test`, 45 assertions): ADPCM decode,
-jitter buffer, KiwiSDR SND/MSG/WF parsing, and the websocket handshake + frame
-round-trip, including the recv-timeout path that caused a stream-misalignment
-bug on hardware.
+**Verified on the host** (native `vitasdr_test`, 95 assertions): ADPCM decode,
+jitter buffer, KiwiSDR SND/MSG/WF parsing, the OpenWebRX config/offset/FFT/
+SYNC-audio paths, the resampler, the directory parser, and the websocket
+handshake + frame round-trip, including the recv-timeout path that caused a
+stream-misalignment bug on hardware.
+
+**OpenWebRX + TLS (new, host-validated only).** The OpenWebRX client and the
+BearSSL TLS layer were checked end-to-end against a live OpenWebRX server from
+the build host (TLS handshake, multi-message config, FFT + audio decode), with
+certificate verification both on and off. Not yet shaken out on real Vita
+hardware. The OpenWebRX waterfall currently shows the full sample-rate span
+rather than re-centring on the tuned offset.
 
 **Fixed during on-device testing:**
 - worker-thread stack overflow (64 KB ws buffer on a 64 KB stack) -> static.
@@ -211,5 +250,7 @@ bug on hardware.
 On-device diagnostics are written to `ux0:data/vitasdr/vitasdr.log` (verbose;
 trim once stable).
 
-Next steps: confirm waterfall renders on device; then trim logging, add
-bookmarks, touchscreen, palette/zoom controls, and the OpenWebRX protocol.
+Next steps: shake out OpenWebRX + TLS on real hardware (verify-on cert check
+depends on the Vita clock; the Settings toggle is the fallback); re-centre the
+OpenWebRX waterfall on the tuned offset and/or add profile/band switching; then
+trim logging, add bookmarks, touchscreen, and palette/zoom controls.
