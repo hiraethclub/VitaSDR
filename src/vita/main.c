@@ -9,6 +9,7 @@
  */
 #include "app.h"
 #include "net.h"
+#include "tls.h"
 #include "log.h"
 #include "b64.h"
 #include "build_info.h"
@@ -152,7 +153,11 @@ int net_thread(SceSize args, void *argp)
                     case WS_CONNECT_ENORESP: why = "no HTTP response"; break;
                     case WS_CONNECT_ESTATUS: why = "not a websocket (bad HTTP status)"; break;
                     case WS_CONNECT_EACCEPT: why = "bad ws accept key"; break;
-                    case WS_CONNECT_ETLS:    why = "TLS handshake failed"; break;
+                    case WS_CONNECT_ETLS:
+                        why = "TLS handshake failed";
+                        vlog("TLS last_error = %d (BR_ERR_*; -1 socket, -2 timeout)",
+                             tls_last_error());
+                        break;
                     case -6:                 why = "handshake send failed"; break;
                     default:                 why = "connect failed"; break;
                     }

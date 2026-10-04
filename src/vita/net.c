@@ -13,6 +13,7 @@
 #include <psp2/net/netctl.h>
 #include <psp2/sysmodule.h>
 #include <psp2/kernel/clib.h>
+#include <psp2/kernel/rng.h>
 
 #include <string.h>
 
@@ -216,4 +217,22 @@ void net_close(int fd)
 {
     if (fd >= 0)
         sceNetSocketClose(fd);
+}
+
+int net_get_entropy(void *buf, size_t len)
+{
+    /* sceKernelGetRandomNumber caps at 64 bytes per call; loop for more. */
+    unsigned char *p = buf;
+    size_t off = 0;
+    while (off < len) {
+        SceSize chunk = (SceSize)(len - off);
+        if (chunk > 64) chunk = 64;
+        int ret = sceKernelGetRandomNumber(p + off, chunk);
+        if (ret < 0) {
+            vlog("sceKernelGetRandomNumber = 0x%08X", ret);
+            return NET_ERR;
+        }
+        off += chunk;
+    }
+    return 0;
 }

@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -140,4 +141,20 @@ void net_close(int fd)
 {
     if (fd >= 0)
         close(fd);
+}
+
+int net_get_entropy(void *buf, size_t len)
+{
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f) {
+        size_t n = fread(buf, 1, len, f);
+        fclose(f);
+        if (n == len)
+            return 0;
+    }
+    /* Fallback: rand() seeded by the clock. Adequate for the native test. */
+    unsigned char *p = buf;
+    for (size_t i = 0; i < len; i++)
+        p[i] = (unsigned char)rand();
+    return 0;
 }

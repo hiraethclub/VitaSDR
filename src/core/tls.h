@@ -42,4 +42,8 @@ int tls_recv(tls_session *s, void *buf, size_t len, int timeout_ms);
  * it and closes it via net_close). */
 void tls_close(tls_session *s);
 
+/* BearSSL error code (BR_ERR_*) from the most recent failed handshake, for
+ * diagnostics; -1 socket error, -2 timed out waiting for the peer. */
+int tls_last_error(void);
+
 #endif /* VITASDR_TLS_H */

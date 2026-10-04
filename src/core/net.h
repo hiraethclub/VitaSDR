@@ -51,4 +51,10 @@ int  net_recv(int fd, void *buf, size_t len, int timeout_ms);
 /* Close a connection handle. Safe to call with a negative handle (no-op). */
 void net_close(int fd);
 
+/* Fill `buf` with `len` bytes of entropy for seeding the TLS RNG. The platform
+ * decides the source (the Vita has no /dev/urandom, so BearSSL can't self-seed
+ * and the TLS handshake would fail without this). Returns 0 on success, <0 on
+ * failure. */
+int net_get_entropy(void *buf, size_t len);
+
 #endif /* VITASDR_NET_H */

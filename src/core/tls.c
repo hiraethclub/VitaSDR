@@ -59,6 +59,12 @@ struct tls_session {
 
 static struct tls_session S;
 static int s_active;
+static int s_last_err;   /* BearSSL last error from the most recent session */
+
+int tls_last_error(void)
+{
+    return s_last_err;
+}
 
 /* Push any pending outgoing TLS records to the socket. Returns 0 on success,
  * <0 on a socket error. */
@@ -107,31 +113,48 @@ tls_session *tls_open(int fd, const char *sni, int verify, int timeout_ms)
         S.na.inner = &S.xc.vtable;
         br_ssl_engine_set_x509(&S.sc.eng, &S.na.vtable);
     }
+    /* BearSSL has no entropy source on bare SCE (no /dev/urandom), so its RNG
+     * is unseeded and the handshake would fail with BR_ERR_NO_RANDOM. Seed it
+     * from the platform before the handshake. */
+    {
+        unsigned char seed[32];
+        if (net_get_entropy(seed, sizeof(seed)) == 0)
+            br_ssl_engine_inject_entropy(&S.sc.eng, seed, sizeof(seed));
+    }
+
     br_ssl_engine_set_buffer(&S.sc.eng, S.iobuf, sizeof(S.iobuf), 1);
-    if (!br_ssl_client_reset(&S.sc, sni, 0))
+    if (!br_ssl_client_reset(&S.sc, sni, 0)) {
+        s_last_err = br_ssl_engine_last_error(&S.sc.eng);
         return NULL;
+    }
     s_active = 1;
 
-    /* Drive the handshake to completion (engine ready for app data) or error. */
-    for (int guard = 0; guard < 64; guard++) {
+    /* Drive the handshake to completion (engine ready for app data) or error.
+     * Bound the number of empty (timeout) reads so a stalled peer can't spin
+     * forever, but don't count productive steps against it. */
+    s_last_err = 0;
+    int idle = 0;
+    while (idle < 50) {
         unsigned st = br_ssl_engine_current_state(&S.sc.eng);
         if (st & BR_SSL_CLOSED) {
+            s_last_err = br_ssl_engine_last_error(&S.sc.eng);
             s_active = 0;
-            return NULL;   /* handshake failed (bad cert, alert, ...) */
+            return NULL;   /* handshake failed (no random, bad cert, alert, ...) */
         }
         if (st & (BR_SSL_SENDAPP | BR_SSL_RECVAPP))
             return &S;     /* handshake complete */
         if (st & BR_SSL_SENDREC) {
-            if (flush_out(&S) != 0) { s_active = 0; return NULL; }
+            if (flush_out(&S) != 0) { s_last_err = -1; s_active = 0; return NULL; }
             continue;
         }
         if (st & BR_SSL_RECVREC) {
             int r = pump_in(&S, timeout_ms);
-            if (r == NET_TIMEOUT) continue;      /* keep waiting for the peer */
-            if (r < 0)           { s_active = 0; return NULL; }
+            if (r == NET_TIMEOUT) { idle++; continue; }  /* keep waiting */
+            if (r < 0)           { s_last_err = -1; s_active = 0; return NULL; }
             continue;
         }
     }
+    s_last_err = -2;   /* gave up waiting for the peer */
     s_active = 0;
     return NULL;
 }
