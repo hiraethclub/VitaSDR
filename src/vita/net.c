@@ -13,6 +13,7 @@
 #include <psp2/net/netctl.h>
 #include <psp2/sysmodule.h>
 #include <psp2/kernel/clib.h>
+#include <psp2/kernel/rng.h>
 
 #include <string.h>
 
@@ -172,6 +173,12 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
     int one = 1;
     sceNetSetsockopt(sock, SCE_NET_IPPROTO_TCP, SCE_NET_TCP_NODELAY, &one,
                      sizeof(one));
+    /* Enlarge the receive buffer so a burst from a fast server (OpenWebRX
+     * pushes FFT + audio continuously) is absorbed rather than stalling the
+     * socket while we are mid-send. */
+    int rcvbuf = 256 * 1024;
+    sceNetSetsockopt(sock, SCE_NET_SOL_SOCKET, SCE_NET_SO_RCVBUF, &rcvbuf,
+                     sizeof(rcvbuf));
     return sock;
 }
 
@@ -186,8 +193,10 @@ int net_send_all(int fd, const void *buf, size_t len)
         else if (n < 0 && ((unsigned)n == SCE_NET_ERROR_EAGAIN ||
                            (unsigned)n == SCE_NET_ERROR_EWOULDBLOCK))
             continue;
-        else
+        else {
+            vlog("net_send: sceNetSend err=0x%08X", (unsigned)n);
             return NET_ERR;
+        }
     }
     return 0;
 }
@@ -202,13 +211,17 @@ int net_recv(int fd, void *buf, size_t len, int timeout_ms)
     int n = sceNetRecv(fd, buf, len, 0);
     if (n > 0)
         return n;
-    if (n == 0)
-        return NET_CLOSED;
-    /* EAGAIN / EWOULDBLOCK / ETIMEDOUT => no data within the timeout. */
+    /* EAGAIN / EWOULDBLOCK / ETIMEDOUT => no data within the timeout (common,
+     * not an error). Everything else is logged so a drop names its cause. */
     if ((unsigned)n == SCE_NET_ERROR_EAGAIN ||
         (unsigned)n == SCE_NET_ERROR_EWOULDBLOCK ||
         (unsigned)n == SCE_NET_ERROR_ETIMEDOUT)
         return NET_TIMEOUT;
+    if (n == 0) {
+        vlog("net_recv: sceNetRecv=0 (peer orderly close/FIN)");
+        return NET_CLOSED;
+    }
+    vlog("net_recv: sceNetRecv err=0x%08X", (unsigned)n);
     return NET_ERR;
 }
 
@@ -216,4 +229,22 @@ void net_close(int fd)
 {
     if (fd >= 0)
         sceNetSocketClose(fd);
+}
+
+int net_get_entropy(void *buf, size_t len)
+{
+    /* sceKernelGetRandomNumber caps at 64 bytes per call; loop for more. */
+    unsigned char *p = buf;
+    size_t off = 0;
+    while (off < len) {
+        SceSize chunk = (SceSize)(len - off);
+        if (chunk > 64) chunk = 64;
+        int ret = sceKernelGetRandomNumber(p + off, chunk);
+        if (ret < 0) {
+            vlog("sceKernelGetRandomNumber = 0x%08X", ret);
+            return NET_ERR;
+        }
+        off += chunk;
+    }
+    return 0;
 }

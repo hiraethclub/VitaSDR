@@ -6,10 +6,12 @@
  * running in a second thread. No external network is used. */
 #include "adpcm.h"
 #include "bandplan.h"
+#include "geo.h"
 #include "jitter.h"
 #include "kiwi.h"
 #include "kiwidir.h"
 #include "net.h"
+#include "owrx.h"
 #include "resamp.h"
 #include "ws_client.h"
 
@@ -448,6 +450,7 @@ static const char *DIR_SAMPLE =
     "\t\t\"users_max\":\"8\",\n"
     "\t\t\"snr\":\"44,45\",\n"
     "\t\t\"loc\":\"Glava\",\n"
+    "\t\t\"gps\":\"(59.65, 12.60)\",\n"
     "\t\t\"status\":\"active\",\n"
     "\t\t\"offline\":\"no\",\n"
     "\t\t\"url\":\"http://sa4bna.hopto.org:8073\"\n"
@@ -489,15 +492,177 @@ static void test_kiwidir(void)
     CHECK(arr[0].users == 2 && arr[0].users_max == 8, "rec0 users");
     CHECK(arr[0].snr == 44, "rec0 snr first value");
     CHECK(arr[0].online == 1, "rec0 online");
+    CHECK(arr[0].has_gps == 1, "rec0 gps parsed");
+    CHECK(arr[0].lat > 59.6f && arr[0].lat < 59.7f, "rec0 gps lat");
+    CHECK(arr[0].lon > 12.5f && arr[0].lon < 12.7f, "rec0 gps lon");
 
     CHECK(strcmp(arr[1].host, "dead.example.net") == 0 && arr[1].port == 8074,
           "rec1 host:port");
     CHECK(arr[1].online == 0, "rec1 offline flagged");
     CHECK(arr[1].snr == -1, "rec1 empty snr -> -1");
+    CHECK(arr[1].has_gps == 0, "rec1 no gps");
 
     CHECK(strcmp(arr[2].host, "barehost.example.org") == 0, "rec2 host");
     CHECK(arr[2].port == 8073, "rec2 default port when url has none");
     CHECK(arr[2].online == 0, "rec2 inactive status -> offline");
+}
+
+/* -------------------- OpenWebRX -------------------- */
+
+static void test_owrx(void)
+{
+    printf("[owrx]\n");
+
+    /* --- JSON extractors on a realistic config object --- */
+    const char *cfg =
+        "{\"type\":\"config\",\"value\":{\"samp_rate\":2400000,"
+        "\"center_freq\":107000000,\"fft_size\":4096,"
+        "\"audio_compression\":\"adpcm\",\"fft_compression\":\"adpcm\","
+        "\"start_mod\":\"wfm\",\"start_offset_freq\":-500000}}";
+    double num;
+    char str[32];
+    CHECK(owrx_json_number(cfg, "center_freq", &num) && num == 107000000.0,
+          "json center_freq");
+    CHECK(owrx_json_number(cfg, "start_offset_freq", &num) && num == -500000.0,
+          "json negative number");
+    CHECK(owrx_json_string(cfg, "start_mod", str, sizeof(str)) &&
+          strcmp(str, "wfm") == 0, "json string value");
+    CHECK(owrx_json_string(cfg, "fft_compression", str, sizeof(str)) &&
+          strcmp(str, "adpcm") == 0, "json compression flag");
+    /* "offset_freq" must NOT be matched inside "start_offset_freq" */
+    CHECK(!owrx_json_number(cfg, "offset_freq", &num),
+          "json no partial-key match");
+    CHECK(!owrx_json_number(cfg, "nonesuch", &num), "json absent key");
+
+    /* --- mode mapping --- */
+    CHECK(strcmp(owrx_map_mode("nbfm"), "nfm") == 0, "map nbfm->nfm");
+    CHECK(strcmp(owrx_map_mode("usb"), "usb") == 0, "map usb");
+    CHECK(strcmp(owrx_map_mode("wfm"), "wfm") == 0, "map wfm");
+
+    /* --- offset computation + clamp (107 MHz center, 2.4 MHz span) --- */
+    CHECK(owrx_offset_hz(106500.0, 107000000.0, 2400000.0) == -500000,
+          "offset mid-band");
+    CHECK(owrx_offset_hz(100000.0, 107000000.0, 2400000.0) == -1080000,
+          "offset clamps at low edge");
+    CHECK(owrx_offset_hz(120000.0, 107000000.0, 2400000.0) == 1080000,
+          "offset clamps at high edge");
+
+    /* --- config accumulated across two partial messages; DSP start gating --- */
+    static owrx_client o;   /* static: embeds the 64 KB ws receive buffer */
+    memset(&o, 0, sizeof(o));
+    o.ws.fd = -1;           /* not connected: control sends are harmless no-ops */
+    strcpy(o.mode, "wfm");
+    o.freq_khz = 106500.0;
+    owrx_handle_text(&o,
+        "{\"type\":\"config\",\"value\":{\"fft_size\":4096,"
+        "\"audio_compression\":\"adpcm\",\"fft_compression\":\"adpcm\"}}", 0);
+    CHECK(o.have_center == 0 && o.dsp_started == 0,
+          "owrx waits for center+samp before starting");
+    CHECK(o.audio_adpcm_on == 1 && o.fft_adpcm_on == 1,
+          "owrx reads compression flags");
+    owrx_handle_text(&o,
+        "{\"type\":\"config\",\"value\":{\"samp_rate\":2400000,"
+        "\"center_freq\":107000000,\"start_offset_freq\":-500000}}", 0);
+    CHECK(o.have_center == 1, "owrx have_center after samp+center arrive");
+    CHECK(o.dsp_started == 1, "owrx starts DSP once config is complete");
+    CHECK(o.freq_khz == 106500.0, "owrx keeps an in-range requested freq");
+    owrx_handle_text(&o, "{\"type\":\"smeter\",\"value\":-67.5}", 0);
+    CHECK(o.rssi_dbm < -67.0f && o.rssi_dbm > -68.0f, "owrx smeter parse");
+
+    /* out-of-range requested freq => adopt the server's start frequency */
+    static owrx_client o2;
+    memset(&o2, 0, sizeof(o2));
+    o2.ws.fd = -1;
+    strcpy(o2.mode, "wfm");
+    o2.freq_khz = 50000.0;   /* 50 MHz, far outside 107 +/- 1.08 MHz */
+    owrx_handle_text(&o2,
+        "{\"type\":\"config\",\"value\":{\"samp_rate\":2400000,"
+        "\"center_freq\":107000000,\"start_offset_freq\":-500000}}", 0);
+    CHECK(o2.dsp_started == 1, "owrx o2 started");
+    CHECK(o2.freq_khz == 106500.0,
+          "owrx adopts center+start_offset when request is out of range");
+
+    /* --- FFT frame (uncompressed int16 power*100) -> decimated bins --- */
+    static owrx_client f;
+    memset(&f, 0, sizeof(f));
+    f.fft_adpcm_on = 0;   /* feed raw int16 so the test vector is controllable */
+    unsigned char ff[1 + (10 + 4) * 2];
+    ff[0] = 1;            /* type: FFT */
+    int16_t pw[14];
+    for (int i = 0; i < 10; i++) pw[i] = -7000;   /* PAD bins, dropped */
+    pw[10] = -8000; pw[11] = -2000; pw[12] = -9000; pw[13] = -3000; /* dB*100 */
+    for (int i = 0; i < 14; i++) {
+        ff[1 + i * 2]     = (unsigned char)(pw[i] & 0xff);
+        ff[1 + i * 2 + 1] = (unsigned char)((pw[i] >> 8) & 0xff);
+    }
+    int rc = owrx_handle_binary(&f, ff, sizeof(ff));
+    CHECK(rc == OWRX_WF && f.wf_nbins == 4, "owrx FFT -> 4 bins");
+    CHECK(f.wf_bins[1] == 255, "owrx FFT -20 dB -> full scale");
+    CHECK(f.wf_bins[2] == 0, "owrx FFT -90 dB -> zero");
+    CHECK(f.wf_bins[0] > 0 && f.wf_bins[0] < 255, "owrx FFT mid dB in range");
+
+    /* --- audio SYNC decode, split across two messages (header straddles) --- */
+    jitter_buf jb;
+    jitter_init(&jb, 4096);
+    static owrx_client a;
+    memset(&a, 0, sizeof(a));
+    a.sink = &jb;
+    a.audio_adpcm_on = 1;
+    adpcm_reset(&a.audio_adpcm);
+    unsigned char dat[8] = { 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 };
+    adpcm_state ref;
+    adpcm_reset(&ref);     /* post-sync state (index 0, predictor 0) == reset */
+    int16_t expect[16];
+    adpcm_decode(&ref, dat, 8, expect);
+    unsigned char pay[4 + 4 + 8];
+    memcpy(pay, "SYNC", 4);
+    pay[4] = 0; pay[5] = 0; pay[6] = 0; pay[7] = 0;   /* index=0, predictor=0 */
+    memcpy(pay + 8, dat, 8);
+    unsigned char m1[1 + 6], m2[1 + 10];
+    m1[0] = 2; memcpy(m1 + 1, pay, 6);        /* type + "SYNC" + 2 header bytes */
+    m2[0] = 2; memcpy(m2 + 1, pay + 6, 10);   /* type + 2 header bytes + 8 data */
+    owrx_handle_binary(&a, m1, sizeof(m1));
+    int r2 = owrx_handle_binary(&a, m2, sizeof(m2));
+    CHECK(r2 == OWRX_AUDIO, "owrx audio frame surfaced");
+    int16_t got[16];
+    size_t ng = jitter_pop(&jb, got, 16);
+    int ok = (ng == 16);
+    for (size_t i = 0; i < ng; i++)
+        if (got[i] != expect[i]) ok = 0;
+    CHECK(ok, "owrx audio SYNC decode matches reference across split");
+    CHECK(a.samples_rx == 16, "owrx audio sample count");
+    jitter_free(&jb);
+}
+
+/* -------------------- geo helpers (distance filter) -------------------- */
+
+static void test_geo(void)
+{
+    printf("[geo]\n");
+    double lat, lon;
+
+    /* gps string parse: bracketed (as the directory sends it) and bare. */
+    CHECK(geo_parse_gps("(59.65, 12.60)", &lat, &lon) == 1 &&
+          lat > 59.6 && lat < 59.7 && lon > 12.5 && lon < 12.7, "gps bracketed");
+    CHECK(geo_parse_gps("50.85,-0.66", &lat, &lon) == 1 &&
+          lat > 50.8 && lat < 50.9 && lon < -0.6 && lon > -0.7, "gps bare");
+    CHECK(geo_parse_gps("not a coord", &lat, &lon) == 0, "gps rejects junk");
+    CHECK(geo_parse_gps("(200, 0)", &lat, &lon) == 0, "gps rejects out of range");
+
+    /* Maidenhead: IO90 centre ~ (50.5, -1.0); IO90QU refines to ~ (50.85,
+     * -0.63), near Chichester. Parsing is case-insensitive. */
+    CHECK(geo_maidenhead_to_latlon("IO90", &lat, &lon) == 1 &&
+          lat > 50.4 && lat < 50.6 && lon > -1.1 && lon < -0.9, "grid 4-char");
+    CHECK(geo_maidenhead_to_latlon("IO90QU", &lat, &lon) == 1 &&
+          lat > 50.8 && lat < 50.95 && lon > -0.75 && lon < -0.5, "grid 6-char");
+    CHECK(geo_maidenhead_to_latlon("io90qu", &lat, &lon) == 1, "grid lowercase");
+    CHECK(geo_maidenhead_to_latlon("ZZ99", &lat, &lon) == 0, "grid rejects bad field");
+    CHECK(geo_maidenhead_to_latlon("IO", &lat, &lon) == 0, "grid rejects too short");
+
+    /* Haversine sanity: London to Paris is ~343 km; a point to itself is 0. */
+    double d = geo_haversine_km(51.5, -0.13, 48.85, 2.35);
+    CHECK(d > 320.0 && d < 360.0, "haversine London-Paris ~343km");
+    CHECK(geo_haversine_km(10.0, 20.0, 10.0, 20.0) < 0.001, "haversine zero");
 }
 
 int main(void)
@@ -508,7 +673,9 @@ int main(void)
     test_kiwi_parse();
     test_bandplan();
     test_resamp();
+    test_geo();
     test_kiwidir();
+    test_owrx();
     test_websocket_loopback();
     test_websocket_recv_timeout();
     printf("==================\n%d passed, %d failed\n", g_pass, g_fail);

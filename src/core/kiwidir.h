@@ -22,6 +22,15 @@ typedef struct {
     int  users_max;
     int  snr;        /* first value of the "a,b" snr pair; -1 if unknown */
     int  online;     /* status=="active" && offline=="no" */
+    int  has_gps;    /* lat/lon parsed from the directory "gps" field */
+    float lat, lon;  /* receiver position (degrees) when has_gps */
+    /* Which client speaks to this receiver: 0 = KiwiSDR, 1 = OpenWebRX. Public
+     * directory entries are always KiwiSDR; favourites/manual adds may differ.
+     * `path` is the WebSocket path for OpenWebRX (usually "/ws/"); unused for
+     * KiwiSDR, which builds its own SND/WF paths. */
+    int  proto;
+    char path[64];
+    int  tls;        /* OpenWebRX over wss:// (https); 0 for plain ws:// */
 } kiwi_server;
 
 typedef struct {

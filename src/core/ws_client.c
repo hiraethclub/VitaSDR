@@ -1,11 +1,41 @@
 /* Minimal RFC 6455 WebSocket client. See ws_client.h. */
 #include "ws_client.h"
 #include "net.h"
+#include "tls.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* Transport routing: a connected ws_client sends/receives over TLS when
+ * ws->tls is set, otherwise straight over the plain socket. */
+static int ws_raw_send(ws_client *ws, const void *buf, size_t len)
+{
+    return ws->tls ? tls_send_all(ws->tls, buf, len)
+                   : net_send_all(ws->fd, buf, len);
+}
+static int ws_raw_recv(ws_client *ws, void *buf, size_t len, int timeout_ms)
+{
+    return ws->tls ? tls_recv(ws->tls, buf, len, timeout_ms)
+                   : net_recv(ws->fd, buf, len, timeout_ms);
+}
+
+/* Same routing during ws_connect, where the fd/session are still local (ws->fd
+ * is not set until the handshake succeeds). */
+static int conn_send(tls_session *ts, int fd, const void *b, size_t n)
+{
+    return ts ? tls_send_all(ts, b, n) : net_send_all(fd, b, n);
+}
+static int conn_recv(tls_session *ts, int fd, void *b, size_t n, int t)
+{
+    return ts ? tls_recv(ts, b, n, t) : net_recv(fd, b, n, t);
+}
+static void conn_fail_close(tls_session *ts, int fd)
+{
+    if (ts) tls_close(ts);
+    net_close(fd);
+}
 
 /* ------------------------------------------------------------------ */
 /* SHA-1 (used only to validate the handshake Sec-WebSocket-Accept).    */
@@ -120,12 +150,30 @@ static void compute_accept(const char *key, char accept_out[32])
 int ws_connect(ws_client *ws, const char *host, int port, const char *path,
                const char *origin, int timeout_ms)
 {
+    return ws_connect_ex(ws, host, port, path, origin, 0, 0, timeout_ms);
+}
+
+int ws_connect_ex(ws_client *ws, const char *host, int port, const char *path,
+                  const char *origin, int use_tls, int verify, int timeout_ms)
+{
     ws->fd = -1;
+    ws->tls = NULL;
     ws->in_len = 0;
 
     int fd = net_tcp_connect(host, port, timeout_ms);
     if (fd < 0)
         return WS_CONNECT_ETCP;
+
+    /* For wss://, bring up TLS before the HTTP upgrade; all handshake and
+     * frame I/O then flows through the session via the ws_raw_* helpers. */
+    tls_session *ts = NULL;
+    if (use_tls) {
+        ts = tls_open(fd, host, verify, timeout_ms);
+        if (!ts) {
+            conn_fail_close(ts, fd);
+            return WS_CONNECT_ETLS;
+        }
+    }
 
     /* Build a client key: 16 pseudo-random bytes, base64-encoded. This does
      * not need cryptographic strength; it only echoes back in the accept. */
@@ -151,12 +199,12 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         path, host, port, key,
         origin ? "Origin: " : "", origin ? origin : "", origin ? "\r\n" : "");
     if (n < 0 || (size_t)n >= sizeof(req)) {
-        net_close(fd);
+        conn_fail_close(ts, fd);
         return WS_CONNECT_ESEND;
     }
 
-    if (net_send_all(fd, req, (size_t)n) != 0) {
-        net_close(fd);
+    if (conn_send(ts, fd, req, (size_t)n) != 0) {
+        conn_fail_close(ts, fd);
         return WS_CONNECT_ESEND;
     }
 
@@ -168,17 +216,17 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
     int header_end = -1;
     int idle = 0;
     while (rlen < sizeof(resp) - 1) {
-        int r = net_recv(fd, resp + rlen, sizeof(resp) - 1 - rlen, timeout_ms);
+        int r = conn_recv(ts, fd, resp + rlen, sizeof(resp) - 1 - rlen, timeout_ms);
         if (r == NET_TIMEOUT) {
             if (++idle >= 2) {   /* ~2x timeout_ms of silence: give up */
-                net_close(fd);
+                conn_fail_close(ts, fd);
                 return WS_CONNECT_ENORESP;
             }
             continue;
         }
         idle = 0;
         if (r <= 0) {
-            net_close(fd);
+            conn_fail_close(ts, fd);
             return WS_CONNECT_ENORESP;
         }
         rlen += (size_t)r;
@@ -190,14 +238,14 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         }
     }
     if (header_end < 0) {
-        net_close(fd);
+        conn_fail_close(ts, fd);
         return WS_CONNECT_ENORESP;
     }
 
     /* Require a 101 status. */
     if (strncmp(resp, "HTTP/1.1 101", 12) != 0 &&
         strncmp(resp, "HTTP/1.0 101", 12) != 0) {
-        net_close(fd);
+        conn_fail_close(ts, fd);
         return WS_CONNECT_ESTATUS;
     }
 
@@ -215,7 +263,7 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
         char want[32];
         compute_accept(key, want);
         if (strcmp(got, want) != 0) {
-            net_close(fd);
+            conn_fail_close(ts, fd);
             return WS_CONNECT_EACCEPT;
         }
     }
@@ -245,6 +293,7 @@ int ws_connect(ws_client *ws, const char *host, int port, const char *path,
                                                       : sizeof(ws->dbg_first);
     memcpy(ws->dbg_first, ws->in, ws->dbg_first_len);
     ws->fd = fd;
+    ws->tls = ts;   /* NULL for a plain link; the live session for wss:// */
     return 0;
 }
 
@@ -280,11 +329,23 @@ static int ws_send_frame(ws_client *ws, int opcode, const void *data,
         hdr[h++] = mask[i];
     }
 
-    if (net_send_all(ws->fd, hdr, h) != 0)
-        return -1;
-
-    /* Send the payload masked, in chunks so we never need a big temp buffer. */
     const uint8_t *p = (const uint8_t *)data;
+
+    /* Small frames (all our control messages: handshake, tuning, keepalive) go
+     * as ONE write so the header and payload land in a single TCP segment.
+     * Sending the tiny header as its own segment (TCP_NODELAY is on) ahead of
+     * the payload was a plausible trigger for mid-stream drops on the Vita. */
+    if (len + h <= 2048) {
+        uint8_t frame[2048 + 14];
+        memcpy(frame, hdr, h);
+        for (size_t i = 0; i < len; i++)
+            frame[h + i] = (uint8_t)(p[i] ^ mask[i & 3]);
+        return ws_raw_send(ws, frame, h + len);
+    }
+
+    /* Large frames (not produced by this client) still go header-then-chunks. */
+    if (ws_raw_send(ws, hdr, h) != 0)
+        return -1;
     uint8_t chunk[1024];
     size_t off = 0;
     while (off < len) {
@@ -292,7 +353,7 @@ static int ws_send_frame(ws_client *ws, int opcode, const void *data,
         if (take > sizeof(chunk)) take = sizeof(chunk);
         for (size_t i = 0; i < take; i++)
             chunk[i] = (uint8_t)(p[off + i] ^ mask[(off + i) & 3]);
-        if (net_send_all(ws->fd, chunk, take) != 0)
+        if (ws_raw_send(ws, chunk, take) != 0)
             return -1;
         off += take;
     }
@@ -326,7 +387,7 @@ static int ensure_buffered(ws_client *ws, size_t need, int timeout_ms)
         if (ws->in_len >= WS_INBUF_SIZE)
             return WS_ERROR; /* frame larger than our buffer */
         uint8_t *dst = ws->in + ws->in_len;
-        int r = net_recv(ws->fd, dst, WS_INBUF_SIZE - ws->in_len, timeout_ms);
+        int r = ws_raw_recv(ws, dst, WS_INBUF_SIZE - ws->in_len, timeout_ms);
         if (r == NET_TIMEOUT)
             return WS_NONE;
         if (r <= 0) {
@@ -447,6 +508,10 @@ void ws_close(ws_client *ws)
     if (ws->fd >= 0) {
         uint8_t empty = 0;
         ws_send_frame(ws, 0x8, &empty, 0);
+        if (ws->tls) {
+            tls_close(ws->tls);
+            ws->tls = NULL;
+        }
         net_close(ws->fd);
         ws->fd = -1;
     }

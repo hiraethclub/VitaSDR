@@ -1,32 +1,49 @@
 # VitaSDR
 
 A PS Vita homebrew client for web SDR receivers. Point it at a
-[KiwiSDR](http://kiwisdr.com/) and it streams the audio, tunes it, and shows a
-live RF waterfall — a shortwave/HF radio in your hands, using someone else's
-antenna over the internet.
+[KiwiSDR](http://kiwisdr.com/) or an [OpenWebRX](https://www.openwebrx.de/)
+receiver and it streams the audio, tunes it, and shows a live RF waterfall — a
+shortwave/HF (and, via OpenWebRX, VHF) radio in your hands, using someone
+else's antenna over the internet.
 
-> Status: **v0.2.0 — working on real hardware.** Verified on a PS Vita PCH-1000:
+> Status: **v0.3.0 — working on real hardware.** Verified on a PS Vita PCH-1000:
 > browse a live directory of public KiwiSDRs, connect, play audio, tune, and
-> see the waterfall. The radio core also has host-side unit tests. See
-> [Testing status](#testing-status).
+> see the waterfall. v0.3.0 adds a server-picker filter system (free slots, SNR,
+> location, distance) and the OpenWebRX/TLS client (host-validated). The radio
+> core also has host-side unit tests. See [Testing status](#testing-status).
 
 ## What works today
 
-- KiwiSDR audio: IMA-ADPCM decode, windowed-sinc resampler, jitter-buffered
-  playback via `sceAudioOut` (double-buffered); per-mode make-up gain
+- **Two receiver protocols**, tagged per server: **KiwiSDR** (two sockets,
+  audio + waterfall) and **OpenWebRX / OpenWebRX+** (one socket carrying both).
+- OpenWebRX over **`wss://` (TLS)** as well as plain `ws://`, so HTTPS-fronted
+  receivers work; certificate verification is on by default with a Settings
+  toggle. TLS is a vendored BearSSL with a compiled-in CA set (no cert file).
+- Audio: IMA-ADPCM decode (continuous, SYNC-resynced for OpenWebRX),
+  windowed-sinc resampler, jitter-buffered `sceAudioOut` playback
+  (double-buffered); per-mode make-up gain
 - On-startup **server picker** with the live public KiwiSDR directory, plus a
-  user **favourites** list and manual add via the on-screen keyboard
-- **Band-jump selector** (HF amateur/broadcast bands; VHF entries for later)
+  user **favourites** list and manual add via the on-screen keyboard — type a
+  bare host for a KiwiSDR, or an `https://…` URL for an OpenWebRX
+- **Picker filters** (press L): hide receivers without room for both our
+  connections (free slots ≥ 2), set a minimum SNR, match a location/name
+  substring, or keep only receivers within a distance of a home point you set
+  (as a Maidenhead grid or lat,lon); optional best-first sorting. Favourites are
+  never filtered. Choices persist in `config.ini`
+- **Band-jump selector** (HF amateur/broadcast bands — everything a KiwiSDR can
+  reach; VHF bands are omitted until OpenWebRX support lands)
 - Tuning (D-pad step + accelerated analog sweep), mode switching, keepalive
 - Live RF waterfall (1024-bin, viridis) + spectrum, S-meter, passband overlay
 - **Settings** screen: palette, waterfall speed, audio bandwidth, auto-connect/
-  reconnect, keep-screen-awake, direct frequency entry, and more
+  reconnect, keep-screen-awake, verify-TLS-certificate, direct frequency entry
 - Bottom-left status panel: server + live battery / CPU / FPS / buffer stats
 - Custom LiveArea icon & splash; crisp bundled UI font
 - Config/favourites persisted under `ux0:data/vitasdr/`
 
-Not yet: OpenWebRX support (protocol researched), touchscreen, per-button
-remapping.
+OpenWebRX tunes by offset within the receiver's fixed sample window, so the
+waterfall shows the whole span (not re-centred on the tuned signal yet).
+
+Not yet: touchscreen, per-button remapping, OpenWebRX profile/band switching.
 
 ## Building
 
@@ -82,21 +99,28 @@ Radio screen:
 | Circle           | Open the server picker (PS button exits the app)    |
 
 Server picker: **X** connect · **Start** toggle favourite · **Select** add by
-hand · **Square** refresh directory · **Triangle** Settings. Band selector:
+hand · **Square** refresh directory · **L** filters · **Triangle** Settings.
+Band selector:
 Up/Down choose (hold to scroll, L/R skip 5), **X** jump, **Circle** back.
 
 ## Testing status
 
-Verified on the host by `vitasdr_test` (68 assertions):
+Verified on the host by `vitasdr_test` (110 assertions):
 
 - IMA-ADPCM decode against a hand-traced vector
 - jitter buffer FIFO order and drop-oldest overflow
 - KiwiSDR `SND`, `MSG`, and `W/F` frame parsing, and band-plan lookup
+- OpenWebRX: config JSON extraction, offset/clamp tuning maths, FFT decimation,
+  and the continuous SYNC-resynced audio decode across a split message
 - windowed-sinc resampler: image suppression, unity DC and mid-band gain
 - plain-HTTP GET client and the KiwiSDR directory parser (chunk-split safe)
 - full RFC 6455 handshake (with `Sec-WebSocket-Accept` verification) and
   binary frame round-trip against a loopback server, including auto ping/pong
   and the recv-timeout path that once misaligned the frame stream
+
+The OpenWebRX client and the TLS layer were additionally checked end-to-end
+against a live OpenWebRX server from the build host (handshake, config, FFT and
+audio decode), with certificate verification both on and off.
 
 Verified on real hardware (PS Vita PCH-1000):
 
@@ -111,9 +135,11 @@ Known rough edges (not blocking, next on the list):
 - some public receivers allow only one connection per IP, so you get audio but
   no waterfall; the UI labels this ("Audio only")
 - verbose diagnostics and audio captures still write to `ux0:data/vitasdr/`
-- `wf_comp=0` (uncompressed bins) only
-- OpenWebRX not yet implemented (protocol researched; VHF bands like FM are in
-  the band list ready for it + a VHF-capable receiver)
+- KiwiSDR waterfall is `wf_comp=0` (uncompressed bins) only
+- OpenWebRX support is new: validated end-to-end against a live server from the
+  build host (TLS handshake, config, FFT + audio decode) but not yet shaken out
+  on real Vita hardware; the waterfall shows the full sample-rate span rather
+  than re-centring on the tuned offset
 
 ## License
 

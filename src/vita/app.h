@@ -17,6 +17,7 @@
 #include "jitter.h"
 #include "kiwi.h"
 #include "kiwidir.h"
+#include "owrx.h"
 
 #include <psp2/kernel/threadmgr.h>
 
@@ -36,7 +37,8 @@ enum {
     SCREEN_SERVERS = 0,   /* directory picker (startup) */
     SCREEN_RADIO,         /* the radio client */
     SCREEN_SETTINGS,      /* settings + credits */
-    SCREEN_BANDS          /* band-jump selector */
+    SCREEN_BANDS,         /* band-jump selector */
+    SCREEN_FILTERS        /* server-picker filter editor */
 };
 
 /* Directory fetch state. */
@@ -50,11 +52,18 @@ enum {
 /* Audio bandwidth presets (low-pass corner). */
 enum { AUDIO_BW_NARROW = 0, AUDIO_BW_NORMAL, AUDIO_BW_WIDE };
 
+/* Receiver protocol. Must match kiwi_server.proto (0 = Kiwi, 1 = OpenWebRX). */
+enum { PROTO_KIWI = 0, PROTO_OWRX = 1 };
+
 typedef struct {
     /* ---- server config ---- */
     char   host[128];
     int    port;
     char   password[64];
+    int    proto;        /* PROTO_KIWI or PROTO_OWRX */
+    char   path[64];     /* OpenWebRX WebSocket path (e.g. "/ws/") */
+    int    tls;          /* current server uses wss:// (TLS) */
+    int    tls_verify;   /* validate TLS certs against the bundled CA set */
 
     /* ---- tuning / UI state (owned by main thread) ---- */
     double freq_khz;
@@ -72,6 +81,15 @@ typedef struct {
     int    auto_connect;  /* skip picker, connect to last server on launch */
     int    auto_reconnect;/* reconnect automatically on a dropped link */
     int    keep_awake;    /* hold off Vita auto-dim/suspend while running */
+
+    /* ---- server-picker filters (persisted) ---- */
+    int    flt_free2;     /* require >= 2 free slots (we open audio + waterfall) */
+    int    flt_min_snr;   /* minimum directory SNR; 0 = off */
+    char   flt_loc[32];   /* location/name substring filter; empty = off */
+    int    flt_dist_km;   /* max distance from home; 0 = off */
+    int    home_set;      /* a home reference point has been entered */
+    float  home_lat, home_lon;  /* home reference point (degrees) */
+    int    flt_sort_best; /* order the filtered list by a quality score */
 
     /* ---- screen / directory (main-thread owns screen, sel) ---- */
     volatile int screen;

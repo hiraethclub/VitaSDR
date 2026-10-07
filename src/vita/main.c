@@ -9,6 +9,7 @@
  */
 #include "app.h"
 #include "net.h"
+#include "tls.h"
 #include "log.h"
 #include "b64.h"
 #include "build_info.h"
@@ -16,6 +17,8 @@
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/common_dialog.h>
+#include <psp2/system_param.h>
 
 #include <vita2d.h>
 
@@ -58,25 +61,40 @@ static void adpcm_capture(unsigned char flags, const unsigned char *audio,
 
 /* ---------------- network thread (SND) ---------------- */
 
-static void net_disconnect(kiwi_client *k, int *connected, int error)
+static void net_disconnect(int proto, kiwi_client *k, owrx_client *o,
+                           int *connected, int error)
 {
     if (*connected) {
         audio_stop();
-        kiwi_disconnect(k);
+        if (proto == PROTO_OWRX)
+            owrx_disconnect(o);
+        else
+            kiwi_disconnect(k);
         *connected = 0;
     }
     g_app.conn_status = error ? CONN_ERROR : CONN_IDLE;
     g_app.rssi_dbm = -140.0f;
+    if (proto == PROTO_OWRX) {
+        /* OpenWebRX multiplexes the waterfall on the audio socket, so there is
+         * no separate wf thread to clear this. */
+        g_app.wf_have_row = 0;
+        g_app.wf_stalled = 0;
+    }
 }
 
 int net_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    /* Static, not on the stack: kiwi_client embeds the 64 KB websocket receive
-     * buffer, which would overflow the thread stack. Single net thread, so a
-     * single static instance is safe. */
+    /* Static, not on the stack: each client embeds a 64 KB websocket receive
+     * buffer (owrx_client also carries FFT/audio scratch), which would overflow
+     * the thread stack. One net thread, so single static instances are safe.
+     * Only one is active at a time, chosen by the receiver's protocol. */
     static kiwi_client k;
+    static owrx_client o;
     int connected = 0;
+    int proto = PROTO_KIWI;
+    int owrx_adopted = 0;      /* adopted the server's resolved start freq yet */
+    int fail_streak = 0;       /* consecutive no-data failures, for reconnect backoff */
     double last_freq = 0;
     char   last_mode[8] = {0};
     uint64_t last_ka = 0, last_tune = 0, last_stat = 0, conn_start = 0;
@@ -89,13 +107,22 @@ int net_thread(SceSize args, void *argp)
                 g_app.conn_status = CONN_CONNECTING;
                 jitter_clear(&g_app.jitter);
                 g_app.audio_rate = 12000;
+                proto = g_app.proto;
+                owrx_adopted = 0;
 
                 sceKernelLockMutex(g_app.lock, 1, NULL);
                 double f = g_app.freq_khz;
                 char m[8]; strncpy(m, g_app.mode, sizeof(m)); m[7] = '\0';
                 sceKernelUnlockMutex(g_app.lock, 1);
 
-                int rc = kiwi_connect(&k, g_app.host, g_app.port,
+                int rc;
+                if (proto == PROTO_OWRX)
+                    rc = owrx_connect(&o, g_app.host, g_app.port,
+                                      g_app.path[0] ? g_app.path : "/ws/",
+                                      g_app.tls, g_app.tls_verify,
+                                      &g_app.jitter, f, m, 6000);
+                else
+                    rc = kiwi_connect(&k, g_app.host, g_app.port,
                                       g_app.password, &g_app.jitter, f, m, 6000);
                 if (rc == 0) {
                     connected = 1;
@@ -106,9 +133,11 @@ int net_thread(SceSize args, void *argp)
                     strncpy(last_mode, m, sizeof(last_mode));
                     last_ka = last_tune = last_stat = conn_start = now_ms();
                     last_msg_seq = 0;
-                    vlog("kiwi_connect OK, audio started");
-                    vlog("SND handshake: rx=%u resp='%s'",
-                         k.ws.dbg_rx_bytes, k.ws.dbg_resp);
+                    ws_client *ws = (proto == PROTO_OWRX) ? &o.ws : &k.ws;
+                    vlog("%s connect OK, audio started",
+                         proto == PROTO_OWRX ? "owrx" : "kiwi");
+                    vlog("handshake: rx=%u resp='%s'",
+                         ws->dbg_rx_bytes, ws->dbg_resp);
                     ui_show_message(&g_app, "connected");
                 } else {
                     const char *why;
@@ -125,11 +154,17 @@ int net_thread(SceSize args, void *argp)
                     case WS_CONNECT_ENORESP: why = "no HTTP response"; break;
                     case WS_CONNECT_ESTATUS: why = "not a websocket (bad HTTP status)"; break;
                     case WS_CONNECT_EACCEPT: why = "bad ws accept key"; break;
-                    case -6:                 why = "auth send failed"; break;
+                    case WS_CONNECT_ETLS:
+                        why = "TLS handshake failed";
+                        vlog("TLS last_error = %d (BR_ERR_*; -1 socket, -2 timeout)",
+                             tls_last_error());
+                        break;
+                    case -6:                 why = "handshake send failed"; break;
                     default:                 why = "connect failed"; break;
                     }
                     snprintf(g_app.last_err, sizeof(g_app.last_err), "%s", why);
-                    vlog("kiwi_connect rc=%d stage=%d -> %s", rc,
+                    vlog("%s connect rc=%d stage=%d -> %s",
+                         proto == PROTO_OWRX ? "owrx" : "kiwi", rc,
                          net_last_fail_stage(), why);
                     g_app.conn_status = CONN_ERROR;
                     ui_show_message(&g_app, why);
@@ -140,74 +175,125 @@ int net_thread(SceSize args, void *argp)
             continue;
         }
 
-        /* connected */
-        int r = kiwi_poll(&k, 100);
+        /* ---- connected: poll the active client ---- */
+        int r;
+        unsigned msg_seq;
+        unsigned long samples_rx;
+        float rssi;
+        int smeter;
+        const char *last_msg;
+        ws_client *ws;
 
-        /* Surface any new server MSG control text. */
-        if (k.msg_seq != last_msg_seq) {
-            last_msg_seq = k.msg_seq;
-            vlog("MSG: %s", k.last_msg);
+        if (proto == PROTO_OWRX) {
+            r = owrx_poll(&o, 100);
+            if (r == OWRX_WF) {
+                /* OpenWebRX carries the waterfall on this same socket. */
+                memcpy(g_app.wf_bins, o.wf_bins, sizeof(g_app.wf_bins));
+                g_app.wf_nbins = o.wf_nbins;
+                g_app.wf_have_row = 1;
+                g_app.wf_stalled = 0;
+            }
+            /* Once the DSP starts, the client may have snapped the tuning into
+             * the SDR's window; adopt that so the UI shows the real frequency. */
+            if (!owrx_adopted && o.dsp_started) {
+                owrx_adopted = 1;
+                sceKernelLockMutex(g_app.lock, 1, NULL);
+                g_app.freq_khz = o.freq_khz;
+                sceKernelUnlockMutex(g_app.lock, 1);
+                last_freq = o.freq_khz;
+            }
+            msg_seq = o.msg_seq; samples_rx = o.samples_rx;
+            rssi = o.rssi_dbm; smeter = o.smeter;
+            last_msg = o.last_msg; ws = &o.ws;
+        } else {
+            r = kiwi_poll(&k, 100);
+            msg_seq = k.msg_seq; samples_rx = k.samples_rx;
+            rssi = k.rssi_dbm; smeter = k.smeter;
+            last_msg = k.last_msg; ws = &k.ws;
         }
 
-        if (r == KIWI_ERR) {
-            vlog("kiwi_poll ERR after %lu ms, samples=%lu, rx_bytes=%u close=%d net=%d",
-                 (unsigned long)(now_ms() - conn_start), k.samples_rx,
-                 k.ws.dbg_rx_bytes, k.ws.dbg_close_frame, k.ws.dbg_net_result);
+        /* Surface any new server control text. */
+        if (msg_seq != last_msg_seq) {
+            last_msg_seq = msg_seq;
+            vlog("MSG: %s", last_msg);
+        }
+
+        if (r == OWRX_ERR) {   /* == KIWI_ERR == -1 for both clients */
+            vlog("%s poll ERR after %lu ms, samples=%lu, rx_bytes=%u close=%d net=%d",
+                 proto == PROTO_OWRX ? "owrx" : "kiwi",
+                 (unsigned long)(now_ms() - conn_start), samples_rx,
+                 ws->dbg_rx_bytes, ws->dbg_close_frame, ws->dbg_net_result);
             /* Hex + ASCII of the first bytes the server sent, if any. */
             char hex[3 * 32 + 1], asc[32 + 1];
-            unsigned nf = k.ws.dbg_first_len;
+            unsigned nf = ws->dbg_first_len;
             for (unsigned i = 0; i < nf; i++) {
-                snprintf(hex + i * 3, 4, "%02x ", k.ws.dbg_first[i]);
-                unsigned char c = k.ws.dbg_first[i];
+                snprintf(hex + i * 3, 4, "%02x ", ws->dbg_first[i]);
+                unsigned char c = ws->dbg_first[i];
                 asc[i] = (c >= 32 && c < 127) ? (char)c : '.';
             }
             asc[nf] = '\0';
             if (nf == 0)
                 hex[0] = '\0';
             vlog("first %u bytes: %s | %s", nf, hex, asc);
-            net_disconnect(&k, &connected, 1);
+            int had_data = (samples_rx > 0);
+            net_disconnect(proto, &k, &o, &connected, 1);
             if (g_app.auto_reconnect && g_app.host[0]) {
-                sceKernelDelayThread(3000 * 1000);   /* back off, then retry */
+                /* A connection that actually delivered data then dropped is a
+                 * transient: reconnect quickly so the gap is short. Repeated
+                 * immediate failures back off (0.5,1,2,4,8s) so we don't storm
+                 * the server, which can itself provoke refused connections. */
+                int backoff_ms;
+                if (had_data) {
+                    fail_streak = 0;
+                    backoff_ms = 500;
+                } else {
+                    int sh = fail_streak < 4 ? fail_streak : 4;
+                    backoff_ms = 500 * (1 << sh);
+                    fail_streak++;
+                }
+                sceKernelDelayThread((SceUInt)backoff_ms * 1000);
                 if (g_app.running && !g_app.cmd_disconnect)
                     g_app.cmd_connect = 1;
             }
             continue;
         }
-        if (r == KIWI_AUDIO) {
-            g_app.rssi_dbm = k.rssi_dbm;
-            g_app.smeter_raw = k.smeter;
-            g_app.samples_rx = k.samples_rx;
+        if (r == OWRX_AUDIO) {   /* == KIWI_AUDIO == 1 for both clients */
+            g_app.rssi_dbm = rssi;
+            g_app.smeter_raw = smeter;
+            g_app.samples_rx = samples_rx;
         }
 
         /* Periodic status so we can see whether audio is actually flowing. */
         if (now_ms() - last_stat >= 2000) {
             last_stat = now_ms();
             vlog("status: samples=%lu rssi=%.0f jitter=%u rx=%u inlen=%u net=%d msg=%u",
-                 k.samples_rx, (double)k.rssi_dbm,
+                 samples_rx, (double)rssi,
                  (unsigned)jitter_available(&g_app.jitter),
-                 k.ws.dbg_rx_bytes, (unsigned)k.ws.in_len,
-                 k.ws.dbg_net_result, k.msg_seq);
+                 ws->dbg_rx_bytes, (unsigned)ws->in_len,
+                 ws->dbg_net_result, msg_seq);
         }
 
         if (g_app.cmd_disconnect) {
             g_app.cmd_disconnect = 0;
             vlog("cmd_disconnect (user)");
-            net_disconnect(&k, &connected, 0);
+            net_disconnect(proto, &k, &o, &connected, 0);
             continue;
         }
 
-        /* No-response detector: a KiwiSDR with no free channel completes the
-         * WebSocket handshake but then streams nothing (no MSG, no audio). If
-         * we've had neither a control message nor an audio sample within a few
-         * seconds, give up on this receiver and return to the picker so the
-         * user can choose another, instead of sitting silent forever. This is a
-         * deliberate stop, so it does NOT trigger auto-reconnect. */
-        if (k.msg_seq == 0 && k.samples_rx == 0 &&
-            now_ms() - conn_start >= 7000) {
-            vlog("no data 7s after connect (receiver full/declined) -> picker");
+        /* No-response detector: a receiver with no free channel completes the
+         * WebSocket handshake but then streams nothing. If we've had neither a
+         * control message nor an audio sample within a few seconds, give up and
+         * return to the picker rather than sit silent forever. A deliberate
+         * stop, so it does NOT trigger auto-reconnect. OpenWebRX starts its SDR
+         * source on demand, which can take several seconds cold, so give it a
+         * longer grace period than a (full) KiwiSDR. */
+        uint64_t no_data_ms = (proto == PROTO_OWRX) ? 15000 : 7000;
+        if (msg_seq == 0 && samples_rx == 0 &&
+            now_ms() - conn_start >= no_data_ms) {
+            vlog("no data after connect (receiver full/declined/cold) -> picker");
             snprintf(g_app.last_err, sizeof(g_app.last_err),
                      "no response (receiver full or offline?)");
-            net_disconnect(&k, &connected, 1);
+            net_disconnect(proto, &k, &o, &connected, 1);
             g_app.screen = SCREEN_SERVERS;
             ui_show_message(&g_app, "No response - pick another receiver");
             continue;
@@ -221,23 +307,26 @@ int net_thread(SceSize args, void *argp)
             sceKernelUnlockMutex(g_app.lock, 1);
 
             if (f != last_freq) {
-                kiwi_set_frequency(&k, f);
+                if (proto == PROTO_OWRX) owrx_set_frequency(&o, f);
+                else                     kiwi_set_frequency(&k, f);
                 last_freq = f;
             }
             if (strcmp(m, last_mode) != 0) {
-                kiwi_set_mode(&k, m, 0, 0);
+                if (proto == PROTO_OWRX) owrx_set_mode(&o, m);
+                else                     kiwi_set_mode(&k, m, 0, 0);
                 strncpy(last_mode, m, sizeof(last_mode));
             }
             last_tune = t;
         }
 
         if (t - last_ka >= 1000) {
-            kiwi_keepalive(&k);
+            if (proto == PROTO_OWRX) owrx_keepalive(&o);
+            else                     kiwi_keepalive(&k);
             last_ka = t;
         }
     }
 
-    net_disconnect(&k, &connected, 0);
+    net_disconnect(proto, &k, &o, &connected, 0);
     return 0;
 }
 
@@ -256,6 +345,13 @@ int wf_thread(SceSize args, void *argp)
     static unsigned char bins[KIWI_WF_BINS];
 
     while (g_app.running) {
+        /* OpenWebRX multiplexes the waterfall onto the audio socket (handled in
+         * net_thread), so this KiwiSDR-only W/F connection stays idle for it. */
+        if (g_app.proto == PROTO_OWRX) {
+            if (wf_conn) { kiwi_wf_disconnect(&w); wf_conn = 0; }
+            sceKernelDelayThread(100 * 1000);
+            continue;
+        }
         if (g_app.conn_status == CONN_CONNECTED && !wf_conn) {
             sceKernelLockMutex(g_app.lock, 1, NULL);
             double f = g_app.freq_khz;
@@ -381,11 +477,19 @@ int main(int argc, char *argv[])
         return -1;
     g_app.lock = sceKernelCreateMutex("vitasdr_lock", 0, 0, NULL);
 
-    /* Install the ADPCM debug capture (first ~6s of compressed payload). */
+    /* Debug-only ADPCM capture (first ~6s of compressed payload). Off by
+     * default: it streams to the SD card and the extra I/O can cause hitches
+     * (e.g. a flicker while tuning). Build with -DVITASDR_DEBUG_CAPTURE to
+     * re-enable for diagnostics. */
+#ifdef VITASDR_DEBUG_CAPTURE
     s_adpcm_open = (b64_open(&s_adpcm_cap, VITASDR_DATA_DIR "/adpcm.log") == 0);
     s_adpcm_left = 12000 / 2 * 6;   /* ~6s of ADPCM (2 samples/byte @ 12kHz) */
     kiwi_snd_tap = adpcm_capture;
     vlog("adpcm capture %s", s_adpcm_open ? "open" : "FAILED");
+#else
+    (void)s_adpcm_cap; (void)s_adpcm_open; (void)s_adpcm_left;
+    (void)adpcm_capture;
+#endif
 
     int net_ok = (net_global_init() == 0);
     if (!net_ok) {
@@ -397,6 +501,18 @@ int main(int argc, char *argv[])
 
     vita2d_init();
     vita2d_set_clear_color(RGBA8(10, 12, 16, 255));
+
+    /* Common-dialog subsystem must be configured once before any system dialog
+     * (the IME on-screen keyboard used by the server picker's manual add).
+     * Without this the IME never composites and the screen just goes black. */
+    {
+        SceCommonDialogConfigParam cfg;
+        sceCommonDialogConfigParamInit(&cfg);
+        cfg.language = SCE_SYSTEM_PARAM_LANG_ENGLISH_US;
+        cfg.enterButtonAssign = SCE_SYSTEM_PARAM_ENTER_BUTTON_CROSS;
+        sceCommonDialogSetConfigParam(&cfg);
+    }
+
     wf_render_init();
     font_ensure();
     input_init();
@@ -440,6 +556,11 @@ int main(int argc, char *argv[])
          * caused a full-scale "green flash" in the spectrum while scanning. */
 
         if (g_app.wf_have_row) {
+            /* The waterfall is one texture the GPU samples each frame. Make sure
+             * the previous frame's GPU work has finished before we scroll/write
+             * it on the CPU, otherwise a fast-scrolling waterfall (e.g. while
+             * tuning) tears/flickers as the texture changes mid-read. */
+            vita2d_wait_rendering_done();
             wf_push_bins(g_app.wf_bins, g_app.wf_nbins, g_app.palette);
             g_app.wf_have_row = 0;
         }

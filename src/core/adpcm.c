@@ -26,7 +26,7 @@ void adpcm_reset(adpcm_state *st)
 }
 
 /* Decode a single 4-bit nibble, advancing the decoder state. */
-static int16_t decode_nibble(adpcm_state *st, uint8_t nibble)
+int16_t adpcm_decode_nibble(adpcm_state *st, uint8_t nibble)
 {
     int step = step_table[st->index];
     int diff = step >> 3;
@@ -61,8 +61,8 @@ size_t adpcm_decode(adpcm_state *st, const uint8_t *in, size_t in_len,
     for (size_t i = 0; i < in_len; i++) {
         uint8_t byte = in[i];
         /* Low nibble first, then high nibble (KiwiSDR / OpenWebRX order). */
-        out[n++] = decode_nibble(st, byte & 0x0f);
-        out[n++] = decode_nibble(st, (byte >> 4) & 0x0f);
+        out[n++] = adpcm_decode_nibble(st, byte & 0x0f);
+        out[n++] = adpcm_decode_nibble(st, (byte >> 4) & 0x0f);
     }
     return n;
 }

@@ -43,11 +43,12 @@ static const band_entry BANDS[] = {
     { 25670.0, 26100.0, "11m SWBC",     25800.0,  "am"  },
     { 26965.0, 27405.0, "CB",           27185.0,  "am"  },
     { 28000.0, 29700.0, "10m Amateur",  28400.0,  "usb" },
-    { 50000.0, 54000.0, "6m Amateur",   50150.0,  "usb" },
-    { 87500.0,108000.0, "FM Broadcast", 98000.0,  "wfm" },
-    {144000.0,148000.0, "2m Amateur",  145000.0,  "nbfm" },
-    /* NB: VHF bands above need a VHF-capable receiver (not a 0-30 MHz KiwiSDR);
-     * they come good with OpenWebRX support + your own gear. */
+    /* HF only (<= 30 MHz): everything here is reachable by a KiwiSDR. VHF bands
+     * need a VHF-capable receiver via OpenWebRX, so they are omitted for now.
+     * Re-add when OWRX + your own gear are wired up:
+     *   {  50000.0,  54000.0, "6m Amateur",   50150.0,  "usb"  },
+     *   {  87500.0, 108000.0, "FM Broadcast", 98000.0,  "wfm"  },
+     *   { 144000.0, 148000.0, "2m Amateur",  145000.0,  "nbfm" }, */
 };
 
 #define NBANDS (int)(sizeof(BANDS) / sizeof(BANDS[0]))

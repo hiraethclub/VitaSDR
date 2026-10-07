@@ -79,16 +79,19 @@ static int audio_thread(SceSize args, void *argp)
     vlog("audio_thread start: src_rate=%d out=%d step=%.4f target=%u",
          s_src_rate, OUT_RATE, base_step, (unsigned)target);
 
-    /* Debug capture: dump the raw decoded 12 kHz mono PCM (straight from the
-     * ADPCM decoder, before resampling/gain) for the first few seconds, so the
-     * exact decoded audio can be analysed off-device. Written base64-encoded
-     * (as text) so it can be attached in clients that reject binary files;
-     * decode with `base64 -d audio_pcm.log > audio.raw`. */
+    /* Debug-only capture of the raw decoded PCM. Off by default: it streams to
+     * the SD card from the audio thread, and that I/O can glitch audio and hitch
+     * the system. Build with -DVITASDR_DEBUG_CAPTURE to re-enable. */
+    b64_enc *cap = NULL;
+    long cap_left = 0;
+#ifdef VITASDR_DEBUG_CAPTURE
     b64_enc capb;
-    int cap_ok = (b64_open(&capb, VITASDR_DATA_DIR "/audio_pcm.log") == 0);
-    b64_enc *cap = cap_ok ? &capb : NULL;
-    long cap_left = (long)s_src_rate * 6; /* ~6 seconds */
+    if (b64_open(&capb, VITASDR_DATA_DIR "/audio_pcm.log") == 0) {
+        cap = &capb;
+        cap_left = (long)s_src_rate * 6; /* ~6 seconds */
+    }
     vlog("audio capture %s", cap ? "open (" VITASDR_DATA_DIR "/audio_pcm.log)" : "FAILED");
+#endif
 
     while (s_run) {
         /* Nudge the resample step toward the target fill level. */
