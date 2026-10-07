@@ -1,5 +1,6 @@
 /* See kiwidir.h. */
 #include "kiwidir.h"
+#include "geo.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +63,13 @@ static void assign_field(kiwidir_parser *p)
         p->cur.users_max = atoi(v);
     } else if (strcmp(k, "snr") == 0) {
         p->cur.snr = (v[0] >= '0' && v[0] <= '9') ? atoi(v) : -1;
+    } else if (strcmp(k, "gps") == 0) {
+        double la, lo;
+        if (geo_parse_gps(v, &la, &lo)) {
+            p->cur.lat = (float)la;
+            p->cur.lon = (float)lo;
+            p->cur.has_gps = 1;
+        }
     } else if (strcmp(k, "status") == 0) {
         if (strcmp(v, "active") != 0) p->cur.online = 0;
     } else if (strcmp(k, "offline") == 0) {

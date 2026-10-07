@@ -37,6 +37,7 @@ set(CORE_SOURCES
     src/core/resamp.c
     src/core/httpget.c
     src/core/kiwidir.c
+    src/core/geo.c
     src/core/owrx.c
     src/core/tls.c
     src/core/ca_bundle.c)

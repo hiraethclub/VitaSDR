@@ -6,6 +6,7 @@
  * running in a second thread. No external network is used. */
 #include "adpcm.h"
 #include "bandplan.h"
+#include "geo.h"
 #include "jitter.h"
 #include "kiwi.h"
 #include "kiwidir.h"
@@ -449,6 +450,7 @@ static const char *DIR_SAMPLE =
     "\t\t\"users_max\":\"8\",\n"
     "\t\t\"snr\":\"44,45\",\n"
     "\t\t\"loc\":\"Glava\",\n"
+    "\t\t\"gps\":\"(59.65, 12.60)\",\n"
     "\t\t\"status\":\"active\",\n"
     "\t\t\"offline\":\"no\",\n"
     "\t\t\"url\":\"http://sa4bna.hopto.org:8073\"\n"
@@ -490,11 +492,15 @@ static void test_kiwidir(void)
     CHECK(arr[0].users == 2 && arr[0].users_max == 8, "rec0 users");
     CHECK(arr[0].snr == 44, "rec0 snr first value");
     CHECK(arr[0].online == 1, "rec0 online");
+    CHECK(arr[0].has_gps == 1, "rec0 gps parsed");
+    CHECK(arr[0].lat > 59.6f && arr[0].lat < 59.7f, "rec0 gps lat");
+    CHECK(arr[0].lon > 12.5f && arr[0].lon < 12.7f, "rec0 gps lon");
 
     CHECK(strcmp(arr[1].host, "dead.example.net") == 0 && arr[1].port == 8074,
           "rec1 host:port");
     CHECK(arr[1].online == 0, "rec1 offline flagged");
     CHECK(arr[1].snr == -1, "rec1 empty snr -> -1");
+    CHECK(arr[1].has_gps == 0, "rec1 no gps");
 
     CHECK(strcmp(arr[2].host, "barehost.example.org") == 0, "rec2 host");
     CHECK(arr[2].port == 8073, "rec2 default port when url has none");
@@ -628,6 +634,37 @@ static void test_owrx(void)
     jitter_free(&jb);
 }
 
+/* -------------------- geo helpers (distance filter) -------------------- */
+
+static void test_geo(void)
+{
+    printf("[geo]\n");
+    double lat, lon;
+
+    /* gps string parse: bracketed (as the directory sends it) and bare. */
+    CHECK(geo_parse_gps("(59.65, 12.60)", &lat, &lon) == 1 &&
+          lat > 59.6 && lat < 59.7 && lon > 12.5 && lon < 12.7, "gps bracketed");
+    CHECK(geo_parse_gps("50.85,-0.66", &lat, &lon) == 1 &&
+          lat > 50.8 && lat < 50.9 && lon < -0.6 && lon > -0.7, "gps bare");
+    CHECK(geo_parse_gps("not a coord", &lat, &lon) == 0, "gps rejects junk");
+    CHECK(geo_parse_gps("(200, 0)", &lat, &lon) == 0, "gps rejects out of range");
+
+    /* Maidenhead: IO90 centre ~ (50.5, -1.0); IO90QU refines to ~ (50.85,
+     * -0.63), near Chichester. Parsing is case-insensitive. */
+    CHECK(geo_maidenhead_to_latlon("IO90", &lat, &lon) == 1 &&
+          lat > 50.4 && lat < 50.6 && lon > -1.1 && lon < -0.9, "grid 4-char");
+    CHECK(geo_maidenhead_to_latlon("IO90QU", &lat, &lon) == 1 &&
+          lat > 50.8 && lat < 50.95 && lon > -0.75 && lon < -0.5, "grid 6-char");
+    CHECK(geo_maidenhead_to_latlon("io90qu", &lat, &lon) == 1, "grid lowercase");
+    CHECK(geo_maidenhead_to_latlon("ZZ99", &lat, &lon) == 0, "grid rejects bad field");
+    CHECK(geo_maidenhead_to_latlon("IO", &lat, &lon) == 0, "grid rejects too short");
+
+    /* Haversine sanity: London to Paris is ~343 km; a point to itself is 0. */
+    double d = geo_haversine_km(51.5, -0.13, 48.85, 2.35);
+    CHECK(d > 320.0 && d < 360.0, "haversine London-Paris ~343km");
+    CHECK(geo_haversine_km(10.0, 20.0, 10.0, 20.0) < 0.001, "haversine zero");
+}
+
 int main(void)
 {
     printf("VitaSDR core tests\n==================\n");
@@ -636,6 +673,7 @@ int main(void)
     test_kiwi_parse();
     test_bandplan();
     test_resamp();
+    test_geo();
     test_kiwidir();
     test_owrx();
     test_websocket_loopback();

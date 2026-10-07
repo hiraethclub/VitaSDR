@@ -7,6 +7,7 @@
 #include "app.h"
 #include "httpget.h"
 #include "kiwidir.h"
+#include "geo.h"
 #include "bandplan.h"
 #include "build_info.h"
 #include "font.h"
@@ -43,6 +44,20 @@ static kiwi_server s_srv[MAX_SERVERS];
 static int         s_nsrv = 0;
 static int         s_settings_cur = 0;
 static int         s_band_cur = 0;
+static int         s_filter_cur = 0;
+
+/* Filtered/sorted view over the directory (s_srv). Favourites are never
+ * filtered; only the directory list is. s_view holds indices into s_srv that
+ * pass the current filters, in display order. It is rebuilt lazily by
+ * ensure_view() when the directory is refetched (s_srv_gen changes) or a filter
+ * is edited (s_view_dirty). s_view_dist mirrors the great-circle distance (km)
+ * from the home point for each visible row, for display; <0 if unknown. */
+static int    s_view[MAX_SERVERS];
+static float  s_view_dist[MAX_SERVERS];
+static int    s_nview = 0;
+static int    s_srv_gen = 0;    /* bumped each successful (re)fetch */
+static int    s_view_gen = -1;  /* s_srv_gen the current view was built from */
+static int    s_view_dirty = 1; /* a filter changed; rebuild needed */
 
 /* Favourites: user-curated receivers shown at the top of the picker. Stored in
  * VITASDR_DATA_DIR/favourites.txt, one per line as
@@ -204,20 +219,126 @@ int servers_fetch(void)
         return rc;   /* negative; favourites are still shown */
     qsort(s_srv, (size_t)n, sizeof(s_srv[0]), cmp_srv);
     s_nsrv = n;
+    s_srv_gen++;   /* invalidate the filtered view */
     return n;
 }
 
 int servers_count(void) { return s_nsrv; }
 
-/* The picker shows favourites first, then the fetched directory. These map a
- * combined row index onto the right list. */
-static int picker_total(void) { return s_nfav + s_nsrv; }
+/* ================= directory filtering + ranking ================= */
+
+/* Case-insensitive substring test. */
+static int ci_contains(const char *hay, const char *needle)
+{
+    if (!needle[0]) return 1;
+    for (const char *h = hay; *h; h++) {
+        const char *a = h, *b = needle;
+        while (*a && *b) {
+            char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
+            char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if (!*b) return 1;
+    }
+    return 0;
+}
+
+/* Great-circle distance (km) from the home point to a receiver, or -1 if we
+ * can't tell (no home set, or the receiver has no position). */
+static float srv_dist_km(const app_state *app, const kiwi_server *s)
+{
+    if (!app->home_set || !s->has_gps) return -1.0f;
+    return (float)geo_haversine_km(app->home_lat, app->home_lon, s->lat, s->lon);
+}
+
+/* Does a directory receiver pass the active filters? `dist` is its home
+ * distance (km, <0 if unknown), computed once by the caller. */
+static int filter_pass(const app_state *app, const kiwi_server *s, float dist)
+{
+    if (app->flt_free2) {
+        int freeslots = (s->users_max > 0) ? (s->users_max - s->users) : 0;
+        if (freeslots < 2) return 0;   /* we open audio + waterfall = 2 */
+    }
+    if (app->flt_min_snr > 0 && (s->snr < 0 || s->snr < app->flt_min_snr))
+        return 0;
+    if (app->flt_loc[0] &&
+        !ci_contains(s->loc, app->flt_loc) && !ci_contains(s->name, app->flt_loc))
+        return 0;
+    if (app->flt_dist_km > 0 && app->home_set) {
+        if (dist < 0.0f || dist > (float)app->flt_dist_km) return 0;
+    }
+    return 1;
+}
+
+/* Quality score (higher is better) for sort-by-best. Receivers with room for
+ * both our connections float to the top; SNR adds within that tier, and a
+ * nearer receiver is preferred (a gentle ~1 point per 50 km penalty) when a
+ * home point is set. */
+static double srv_score(const kiwi_server *s, float dist)
+{
+    int freeslots = (s->users_max > 0) ? (s->users_max - s->users) : 0;
+    if (freeslots < 0) freeslots = 0;
+    double sc = (freeslots >= 2) ? 1000.0 : 0.0;
+    sc += (freeslots > 8 ? 8 : freeslots) * 5.0;
+    sc += (s->snr > 0) ? s->snr : 0;
+    if (dist >= 0.0f) sc -= dist / 50.0;
+    return sc;
+}
+
+typedef struct { int idx; double score; float dist; } view_ent;
+static view_ent s_ve[MAX_SERVERS];
+static int cmp_view(const void *a, const void *b)
+{
+    const view_ent *x = a, *y = b;
+    if (x->score < y->score) return 1;
+    if (x->score > y->score) return -1;
+    return 0;
+}
+
+static void rebuild_view(const app_state *app)
+{
+    int m = 0;
+    for (int i = 0; i < s_nsrv; i++) {
+        float d = srv_dist_km(app, &s_srv[i]);
+        if (!filter_pass(app, &s_srv[i], d)) continue;
+        s_ve[m].idx = i;
+        s_ve[m].dist = d;
+        s_ve[m].score = srv_score(&s_srv[i], d);
+        m++;
+    }
+    if (app->flt_sort_best)
+        qsort(s_ve, (size_t)m, sizeof(s_ve[0]), cmp_view);
+    for (int i = 0; i < m; i++) {
+        s_view[i] = s_ve[i].idx;
+        s_view_dist[i] = s_ve[i].dist;
+    }
+    s_nview = m;
+    s_view_gen = s_srv_gen;
+    s_view_dirty = 0;
+}
+
+/* Rebuild the view if the directory or the filters changed, and keep the
+ * selection in range. */
+static void ensure_view(app_state *app)
+{
+    if (s_view_dirty || s_view_gen != s_srv_gen)
+        rebuild_view(app);
+    int total = s_nfav + s_nview;
+    if (app->sel >= total) app->sel = total - 1;
+    if (app->sel < 0) app->sel = 0;
+}
+
+/* The picker shows favourites first, then the filtered directory. These map a
+ * combined row index onto the right list. The directory side goes through
+ * s_view so only receivers passing the filters are shown. */
+static int picker_total(void) { return s_nfav + s_nview; }
 static const kiwi_server *picker_at(int i)
 {
     if (i < 0) return NULL;
     if (i < s_nfav) return &s_fav[i];
     i -= s_nfav;
-    if (i < s_nsrv) return &s_srv[i];
+    if (i < s_nview) return &s_srv[s_view[i]];
     return NULL;
 }
 const kiwi_server *servers_at(int i) { return picker_at(i); }
@@ -225,7 +346,10 @@ const kiwi_server *servers_at(int i) { return picker_at(i); }
 void menu_init(void)
 {
     s_nsrv = 0;
+    s_nview = 0;
     s_settings_cur = 0;
+    s_filter_cur = 0;
+    s_view_dirty = 1;
     fav_load();
 }
 
@@ -301,8 +425,38 @@ const char *ime_get_text(const char *title, const char *initial)
 #define LIST_Y  70
 #define VIS_ROWS 16
 
+/* Picker list is pushed below the filter bar (the band selector keeps LIST_Y). */
+#define PICK_LIST_Y   102
+#define PICK_VIS_ROWS 15
+
+/* One-line summary of the active filters, for the filter bar. */
+static void filter_summary(const app_state *app, char *out, size_t n)
+{
+    int len = 0;
+    const char *sep = "";
+    out[0] = '\0';
+    if (app->flt_free2) {
+        len += snprintf(out + len, n - len, "%s2+ free", sep); sep = "  ";
+    }
+    if (app->flt_min_snr > 0) {
+        len += snprintf(out + len, n - len, "%sSNR>=%d", sep, app->flt_min_snr);
+        sep = "  ";
+    }
+    if (app->flt_loc[0]) {
+        len += snprintf(out + len, n - len, "%sloc:%.12s", sep, app->flt_loc);
+        sep = "  ";
+    }
+    if (app->flt_dist_km > 0 && app->home_set) {
+        len += snprintf(out + len, n - len, "%s<=%dkm", sep, app->flt_dist_km);
+        sep = "  ";
+    }
+    if (len == 0)
+        snprintf(out, n, "none");
+}
+
 static void draw_picker(app_state *app)
 {
+    ensure_view(app);
     font_ensure();
     vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
     vita2d_draw_rectangle(0, 0, SCREEN_W, 40, COL_BAR);
@@ -317,24 +471,35 @@ static void draw_picker(app_state *app)
                               "fetch failed - press [] to retry");
     } else {
         font_drawf(300, 28, COL_DIM, 0.9f,
-                              "%d receivers", s_nsrv);
+                              "showing %d of %d", s_nview, s_nsrv);
     }
 
-    /* Combined list: favourites first, then the directory (hidden while a
-     * refresh is in flight so a half-parsed list isn't shown). */
-    int dir_n = (status == DIR_FETCHING) ? 0 : s_nsrv;
+    /* Filter bar (just under the title): a summary of what's active, with the
+     * key to open the editor. */
+    vita2d_draw_rectangle(0, 40, SCREEN_W, 52, RGBA8(18, 22, 28, 255));
+    char fsum[96];
+    filter_summary(app, fsum, sizeof(fsum));
+    font_drawf(12, 60, COL_DIM, 0.8f, "Filters:");
+    font_drawf(92, 60, COL_ACCENT, 0.8f, "%s", fsum);
+    font_drawf(12, 82, COL_DIM, 0.72f,
+        "L edit filters%s", app->flt_sort_best ? "   (sorted best-first)" : "");
+
+    /* Combined list: favourites first, then the filtered directory (hidden
+     * while a refresh is in flight so a half-parsed list isn't shown). */
+    int dir_n = (status == DIR_FETCHING) ? 0 : s_nview;
     int n = s_nfav + dir_n;
     if (n > 0) {
-        int top = app->sel - VIS_ROWS / 2;
+        int top = app->sel - PICK_VIS_ROWS / 2;
         if (top < 0) top = 0;
-        if (top > n - VIS_ROWS) top = n - VIS_ROWS;
+        if (top > n - PICK_VIS_ROWS) top = n - PICK_VIS_ROWS;
         if (top < 0) top = 0;
 
-        for (int r = 0; r < VIS_ROWS && top + r < n; r++) {
+        for (int r = 0; r < PICK_VIS_ROWS && top + r < n; r++) {
             int idx = top + r;
             int is_fav = (idx < s_nfav);
-            const kiwi_server *s = is_fav ? &s_fav[idx] : &s_srv[idx - s_nfav];
-            int y = LIST_Y + r * ROW_H;
+            const kiwi_server *s = is_fav ? &s_fav[idx] : &s_srv[s_view[idx - s_nfav]];
+            float dist = is_fav ? -1.0f : s_view_dist[idx - s_nfav];
+            int y = PICK_LIST_Y + r * ROW_H;
             if (idx == app->sel)
                 vita2d_draw_rectangle(0, y - 18, SCREEN_W, ROW_H, COL_SELBG);
 
@@ -342,27 +507,33 @@ static void draw_picker(app_state *app)
                 font_drawf(12, y, COL_AMBER, 0.9f, "*");
             unsigned int name_col = (idx == app->sel) ? COL_TEXT : COL_DIM;
             font_drawf(28, y, name_col, 0.9f,
-                                  "%.38s", s->name[0] ? s->name : s->host);
-            font_drawf(560, y, COL_DIM, 0.8f,
-                                  "%.22s", s->loc);
+                                  "%.34s", s->name[0] ? s->name : s->host);
+            font_drawf(540, y, COL_DIM, 0.8f,
+                                  "%.16s", s->loc);
+            if (dist >= 0.0f)
+                font_drawf(690, y, COL_DIM, 0.75f, "%.0fkm", dist);
             if (!is_fav) {
                 unsigned int ucol = (s->users >= s->users_max && s->users_max > 0)
                                     ? COL_AMBER : COL_GREEN;
-                font_drawf(770, y, ucol, 0.8f,
+                font_drawf(778, y, ucol, 0.8f,
                                       "%d/%d", s->users, s->users_max);
                 if (s->snr >= 0)
-                    font_drawf(850, y, COL_DIM, 0.8f,
+                    font_drawf(858, y, COL_DIM, 0.8f,
                                           "snr%d", s->snr);
             }
         }
     } else if (status != DIR_FETCHING) {
-        font_drawf(12, LIST_Y + 20, COL_DIM, 1.0f,
-                              "No receivers. Press [] to fetch the directory.");
+        if (s_nsrv > 0)
+            font_drawf(12, PICK_LIST_Y + 20, COL_DIM, 1.0f,
+                "No receivers match the filters. Press L to relax them.");
+        else
+            font_drawf(12, PICK_LIST_Y + 20, COL_DIM, 1.0f,
+                "No receivers. Press [] to fetch the directory.");
     }
 
     vita2d_draw_rectangle(0, SCREEN_H - 28, SCREEN_W, 28, COL_BAR);
     font_drawf(12, SCREEN_H - 9, COL_DIM, 0.72f,
-        "X connect  START fav(*)  SELECT add  [] refresh  /\\ settings  O radio");
+        "X connect  START fav(*)  SELECT add  [] refresh  L filters  /\\ settings  O radio");
 }
 
 /* ================= settings ================= */
@@ -508,11 +679,115 @@ static void draw_bands(app_state *app)
         "Up/Down select   X jump to band   O / Triangle back");
 }
 
+/* ================= server filters editor ================= */
+
+enum {
+    FLT_FREE2 = 0,
+    FLT_MINSNR,
+    FLT_LOC,
+    FLT_DIST,
+    FLT_HOME,
+    FLT_SORT,
+    FLT_CLEAR,
+    FLT_COUNT
+};
+
+static const int DIST_PRESETS[] = { 0, 500, 1000, 2000, 5000, 10000 };
+#define NDIST (int)(sizeof(DIST_PRESETS) / sizeof(DIST_PRESETS[0]))
+
+static const char *FLT_LABELS[FLT_COUNT] = {
+    "Need 2+ free slots",
+    "Minimum SNR",
+    "Location contains",
+    "Max distance from home",
+    "Home location",
+    "Sort by best",
+    "Clear all filters",
+};
+
+/* Count directory receivers passing the current filters (no sort), for live
+ * feedback while editing. */
+static int live_match_count(const app_state *app)
+{
+    int m = 0;
+    for (int i = 0; i < s_nsrv; i++) {
+        float d = srv_dist_km(app, &s_srv[i]);
+        if (filter_pass(app, &s_srv[i], d)) m++;
+    }
+    return m;
+}
+
+static void filter_value(const app_state *app, int item, char *out, size_t n)
+{
+    switch (item) {
+    case FLT_FREE2:
+        snprintf(out, n, "%s", ONOFF[app->flt_free2 ? 1 : 0]);
+        break;
+    case FLT_MINSNR:
+        if (app->flt_min_snr > 0) snprintf(out, n, "%d", app->flt_min_snr);
+        else                      snprintf(out, n, "Off");
+        break;
+    case FLT_LOC:
+        snprintf(out, n, "%s", app->flt_loc[0] ? app->flt_loc : "(any) >");
+        break;
+    case FLT_DIST:
+        if (app->flt_dist_km <= 0)  snprintf(out, n, "Off");
+        else if (!app->home_set)    snprintf(out, n, "%d km (set home)", app->flt_dist_km);
+        else                        snprintf(out, n, "%d km", app->flt_dist_km);
+        break;
+    case FLT_HOME:
+        if (app->home_set) snprintf(out, n, "%.2f, %.2f >",
+                                    (double)app->home_lat, (double)app->home_lon);
+        else               snprintf(out, n, "(not set) >");
+        break;
+    case FLT_SORT:
+        snprintf(out, n, "%s", ONOFF[app->flt_sort_best ? 1 : 0]);
+        break;
+    case FLT_CLEAR:
+        snprintf(out, n, "press X");
+        break;
+    default:
+        out[0] = '\0';
+        break;
+    }
+}
+
+static void draw_filters(app_state *app)
+{
+    font_ensure();
+    vita2d_draw_rectangle(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+    vita2d_draw_rectangle(0, 0, SCREEN_W, 40, COL_BAR);
+    font_drawf(12, 28, COL_TEXT, 1.2f, "Server filters");
+    font_drawf(300, 28, COL_DIM, 0.9f, "%d of %d match",
+               live_match_count(app), s_nsrv);
+
+    for (int i = 0; i < FLT_COUNT; i++) {
+        int y = 80 + i * 30;
+        if (i == s_filter_cur)
+            vita2d_draw_rectangle(0, y - 18, SCREEN_W, 30, COL_SELBG);
+        unsigned int col = (i == s_filter_cur) ? COL_TEXT : COL_DIM;
+        font_drawf(20, y, col, 0.95f, "%s", FLT_LABELS[i]);
+        char val[48];
+        filter_value(app, i, val, sizeof(val));
+        font_drawf(520, y, COL_ACCENT, 0.95f, "%s", val);
+    }
+
+    int hy = SCREEN_H - 78;
+    vita2d_draw_rectangle(0, hy - 6, SCREEN_W, 78, COL_BAR);
+    font_drawf(20, hy + 14, COL_DIM, 0.8f,
+        "We open two connections (audio + waterfall), so \"2+ free slots\" hides");
+    font_drawf(20, hy + 34, COL_DIM, 0.8f,
+        "receivers that can't serve both. Home accepts a grid (IO90) or lat,lon.");
+    font_drawf(20, hy + 60, COL_DIM, 0.78f,
+        "Up/Down move   L/R change   X edit   O or /\\ apply & back");
+}
+
 void menu_draw(app_state *app)
 {
-    if (app->screen == SCREEN_SETTINGS)   draw_settings(app);
-    else if (app->screen == SCREEN_BANDS) draw_bands(app);
-    else                                  draw_picker(app);
+    if (app->screen == SCREEN_SETTINGS)      draw_settings(app);
+    else if (app->screen == SCREEN_BANDS)    draw_bands(app);
+    else if (app->screen == SCREEN_FILTERS)  draw_filters(app);
+    else                                     draw_picker(app);
 }
 
 static void adjust(int *v, int delta, int lo, int hi)
@@ -664,9 +939,72 @@ static void picker_add_manual(app_state *app)
                                              : "added to favourites");
 }
 
+static void filters_change(app_state *app, int item, int dir)
+{
+    switch (item) {
+    case FLT_FREE2:  app->flt_free2 = !app->flt_free2; break;
+    case FLT_MINSNR: adjust(&app->flt_min_snr, dir * 5, 0, 50); break;
+    case FLT_DIST: {
+        int idx = 0;
+        for (int i = 0; i < NDIST; i++)
+            if (DIST_PRESETS[i] == app->flt_dist_km) idx = i;
+        idx += dir;
+        if (idx < 0) idx = 0;
+        if (idx >= NDIST) idx = NDIST - 1;
+        app->flt_dist_km = DIST_PRESETS[idx];
+        break;
+    }
+    case FLT_SORT:   app->flt_sort_best = !app->flt_sort_best; break;
+    default: return;   /* text/action items don't respond to L/R */
+    }
+    s_view_dirty = 1;
+}
+
+static void filters_activate(app_state *app, int item)
+{
+    if (item == FLT_LOC) {
+        const char *txt = ime_get_text("Location contains (e.g. UK)", app->flt_loc);
+        if (txt) {   /* empty string clears the filter */
+            strncpy(app->flt_loc, txt, sizeof(app->flt_loc) - 1);
+            app->flt_loc[sizeof(app->flt_loc) - 1] = '\0';
+            s_view_dirty = 1;
+        }
+    } else if (item == FLT_HOME) {
+        char init[32];
+        if (app->home_set)
+            snprintf(init, sizeof(init), "%.3f,%.3f",
+                     (double)app->home_lat, (double)app->home_lon);
+        else
+            init[0] = '\0';
+        const char *txt = ime_get_text("Home: grid (IO90) or lat,lon", init);
+        if (txt && txt[0]) {
+            double la, lo;
+            int ok = geo_parse_gps(txt, &la, &lo) ||
+                     geo_maidenhead_to_latlon(txt, &la, &lo);
+            if (ok) {
+                app->home_lat = (float)la;
+                app->home_lon = (float)lo;
+                app->home_set = 1;
+                s_view_dirty = 1;
+                ui_show_message(app, "home location set");
+            } else {
+                ui_show_message(app, "couldn't read that location");
+            }
+        }
+    } else if (item == FLT_CLEAR) {
+        app->flt_free2 = 0;
+        app->flt_min_snr = 0;
+        app->flt_loc[0] = '\0';
+        app->flt_dist_km = 0;
+        s_view_dirty = 1;
+        ui_show_message(app, "filters cleared");
+    }
+}
+
 void menu_handle(app_state *app, unsigned int pressed)
 {
     if (app->screen == SCREEN_SERVERS) {
+        ensure_view(app);
         int n = picker_total();
         if ((pressed & SCE_CTRL_UP) && n > 0)    adjust(&app->sel, -1, 0, n - 1);
         if ((pressed & SCE_CTRL_DOWN) && n > 0)  adjust(&app->sel, +1, 0, n - 1);
@@ -681,9 +1019,28 @@ void menu_handle(app_state *app, unsigned int pressed)
         if (pressed & SCE_CTRL_SQUARE) {
             if (app->dir_status != DIR_FETCHING) app->cmd_fetch_dir = 1;
         }
+        if (pressed & SCE_CTRL_LTRIGGER) {
+            s_filter_cur = 0;
+            app->screen = SCREEN_FILTERS;
+        }
         if (pressed & SCE_CTRL_TRIANGLE)         app->screen = SCREEN_SETTINGS;
         if (pressed & SCE_CTRL_CIRCLE) {
             if (app->conn_status == CONN_CONNECTED) app->screen = SCREEN_RADIO;
+        }
+        return;
+    }
+
+    if (app->screen == SCREEN_FILTERS) {
+        if (pressed & SCE_CTRL_UP)    adjust(&s_filter_cur, -1, 0, FLT_COUNT - 1);
+        if (pressed & SCE_CTRL_DOWN)  adjust(&s_filter_cur, +1, 0, FLT_COUNT - 1);
+        if (pressed & SCE_CTRL_LEFT)  filters_change(app, s_filter_cur, -1);
+        if (pressed & SCE_CTRL_RIGHT) filters_change(app, s_filter_cur, +1);
+        if (pressed & SCE_CTRL_CROSS) filters_activate(app, s_filter_cur);
+        if (pressed & (SCE_CTRL_TRIANGLE | SCE_CTRL_CIRCLE | SCE_CTRL_LTRIGGER)) {
+            config_save(app);      /* persist filter choices */
+            s_view_dirty = 1;      /* rebuild against the new filters */
+            app->sel = 0;          /* land at the top of the fresh list */
+            app->screen = SCREEN_SERVERS;
         }
         return;
     }

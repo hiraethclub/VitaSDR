@@ -58,6 +58,17 @@ void config_defaults(app_state *app)
     app->auto_connect = 0;    /* default: show the server picker on launch */
     app->auto_reconnect = 1;
     app->keep_awake = 1;
+
+    /* Server-picker filters. Hide receivers with no room for our two
+     * connections by default; everything else off until the user asks. */
+    app->flt_free2 = 1;
+    app->flt_min_snr = 0;
+    app->flt_loc[0] = '\0';
+    app->flt_dist_km = 0;
+    app->home_set = 0;
+    app->home_lat = 0.0f;
+    app->home_lon = 0.0f;
+    app->flt_sort_best = 1;
 }
 
 static void ensure_dir(void)
@@ -95,13 +106,24 @@ int config_save(const app_state *app)
         "audio_bw=%d\n"
         "auto_connect=%d\n"
         "auto_reconnect=%d\n"
-        "keep_awake=%d\n",
+        "keep_awake=%d\n"
+        "flt_free2=%d\n"
+        "flt_min_snr=%d\n"
+        "flt_loc=%s\n"
+        "flt_dist_km=%d\n"
+        "home_set=%d\n"
+        "home_lat=%.5f\n"
+        "home_lon=%.5f\n"
+        "flt_sort_best=%d\n",
         app->host, app->port, app->password, app->proto, app->path,
         app->tls, app->tls_verify,
         app->freq_khz, app->mode,
         app->step_hz, app->zoom, app->volume, app->squelch, app->palette,
         app->wf_speed, app->audio_bw, app->auto_connect, app->auto_reconnect,
-        app->keep_awake);
+        app->keep_awake,
+        app->flt_free2, app->flt_min_snr, app->flt_loc, app->flt_dist_km,
+        app->home_set, (double)app->home_lat, (double)app->home_lon,
+        app->flt_sort_best);
     fclose(f);
     return 0;
 }
@@ -175,6 +197,22 @@ int config_load(app_state *app)
             app->auto_reconnect = atoi(val);
         else if (strcmp(key, "keep_awake") == 0)
             app->keep_awake = atoi(val);
+        else if (strcmp(key, "flt_free2") == 0)
+            app->flt_free2 = atoi(val);
+        else if (strcmp(key, "flt_min_snr") == 0)
+            app->flt_min_snr = atoi(val);
+        else if (strcmp(key, "flt_loc") == 0)
+            strncpy(app->flt_loc, val, sizeof(app->flt_loc) - 1);
+        else if (strcmp(key, "flt_dist_km") == 0)
+            app->flt_dist_km = atoi(val);
+        else if (strcmp(key, "home_set") == 0)
+            app->home_set = atoi(val);
+        else if (strcmp(key, "home_lat") == 0)
+            app->home_lat = (float)atof(val);
+        else if (strcmp(key, "home_lon") == 0)
+            app->home_lon = (float)atof(val);
+        else if (strcmp(key, "flt_sort_best") == 0)
+            app->flt_sort_best = atoi(val);
     }
     fclose(f);
 
