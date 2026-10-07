@@ -24,8 +24,8 @@ else's antenna over the internet.
 - On-startup **server picker** with the live public KiwiSDR directory, plus a
   user **favourites** list and manual add via the on-screen keyboard — type a
   bare host for a KiwiSDR, or an `https://…` URL for an OpenWebRX
-- **Band-jump selector** (HF amateur/broadcast bands; VHF entries incl. the FM
-  broadcast band for OpenWebRX/VHF receivers)
+- **Band-jump selector** (HF amateur/broadcast bands — everything a KiwiSDR can
+  reach; VHF bands are omitted until OpenWebRX support lands)
 - Tuning (D-pad step + accelerated analog sweep), mode switching, keepalive
 - Live RF waterfall (1024-bin, viridis) + spectrum, S-meter, passband overlay
 - **Settings** screen: palette, waterfall speed, audio bandwidth, auto-connect/
