@@ -307,17 +307,13 @@ int net_thread(SceSize args, void *argp)
             sceKernelUnlockMutex(g_app.lock, 1);
 
             if (f != last_freq) {
-                int sr;
-                if (proto == PROTO_OWRX) sr = owrx_set_frequency(&o, f);
-                else                     sr = kiwi_set_frequency(&k, f);
-                vlog("retune -> %.3f kHz (send rc=%d)", f, sr);
+                if (proto == PROTO_OWRX) owrx_set_frequency(&o, f);
+                else                     kiwi_set_frequency(&k, f);
                 last_freq = f;
             }
             if (strcmp(m, last_mode) != 0) {
-                int sr;
-                if (proto == PROTO_OWRX) sr = owrx_set_mode(&o, m);
-                else                     sr = kiwi_set_mode(&k, m, 0, 0);
-                vlog("setmode -> %s (send rc=%d)", m, sr);
+                if (proto == PROTO_OWRX) owrx_set_mode(&o, m);
+                else                     kiwi_set_mode(&k, m, 0, 0);
                 strncpy(last_mode, m, sizeof(last_mode));
             }
             last_tune = t;
@@ -481,11 +477,19 @@ int main(int argc, char *argv[])
         return -1;
     g_app.lock = sceKernelCreateMutex("vitasdr_lock", 0, 0, NULL);
 
-    /* Install the ADPCM debug capture (first ~6s of compressed payload). */
+    /* Debug-only ADPCM capture (first ~6s of compressed payload). Off by
+     * default: it streams to the SD card and the extra I/O can cause hitches
+     * (e.g. a flicker while tuning). Build with -DVITASDR_DEBUG_CAPTURE to
+     * re-enable for diagnostics. */
+#ifdef VITASDR_DEBUG_CAPTURE
     s_adpcm_open = (b64_open(&s_adpcm_cap, VITASDR_DATA_DIR "/adpcm.log") == 0);
     s_adpcm_left = 12000 / 2 * 6;   /* ~6s of ADPCM (2 samples/byte @ 12kHz) */
     kiwi_snd_tap = adpcm_capture;
     vlog("adpcm capture %s", s_adpcm_open ? "open" : "FAILED");
+#else
+    (void)s_adpcm_cap; (void)s_adpcm_open; (void)s_adpcm_left;
+    (void)adpcm_capture;
+#endif
 
     int net_ok = (net_global_init() == 0);
     if (!net_ok) {
@@ -552,6 +556,11 @@ int main(int argc, char *argv[])
          * caused a full-scale "green flash" in the spectrum while scanning. */
 
         if (g_app.wf_have_row) {
+            /* The waterfall is one texture the GPU samples each frame. Make sure
+             * the previous frame's GPU work has finished before we scroll/write
+             * it on the CPU, otherwise a fast-scrolling waterfall (e.g. while
+             * tuning) tears/flickers as the texture changes mid-read. */
+            vita2d_wait_rendering_done();
             wf_push_bins(g_app.wf_bins, g_app.wf_nbins, g_app.palette);
             g_app.wf_have_row = 0;
         }
