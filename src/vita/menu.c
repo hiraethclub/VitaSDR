@@ -64,8 +64,8 @@ static int    s_view_dirty = 1; /* a filter changed; rebuild needed */
  *   host,port,proto,path,name
  * where proto is 0 (KiwiSDR) or 1 (OpenWebRX) and path is the OpenWebRX
  * WebSocket path. Older 3-field lines ("host,port,name") are still read and
- * treated as KiwiSDR. Seeded on first run with a known-good reference so
- * there's always something that connects. */
+ * treated as KiwiSDR. Empty until the user stars a receiver; on a fresh
+ * install the live public directory is the starting point. */
 #define MAX_FAV 32
 #define FAV_FILE VITASDR_DATA_DIR "/favourites.txt"
 static kiwi_server s_fav[MAX_FAV];
@@ -114,13 +114,8 @@ static void fav_load(void)
 {
     s_nfav = 0;
     FILE *f = fopen(FAV_FILE, "r");
-    if (!f) {
-        /* First run: seed with a reliable reference. */
-        fav_add_full("gw0kax.proxy.kiwisdr.com", 8073, PROTO_KIWI, 0, "",
-                     "gw0kax (reference)");
-        fav_save();
-        return;
-    }
+    if (!f)
+        return;   /* no favourites yet: the live directory is the starting point */
     char line[256];
     while (fgets(line, sizeof(line), f) && s_nfav < MAX_FAV) {
         char *nl = line; while (*nl && *nl != '\n' && *nl != '\r') nl++; *nl = '\0';
@@ -628,8 +623,8 @@ static void draw_settings(app_state *app)
     int cy = SCREEN_H - 92;
     vita2d_draw_rectangle(0, cy - 6, SCREEN_W, 92, COL_BAR);
     font_drawf(20, cy + 16, COL_TEXT, 0.9f,
-                          "%s (r%s)  -  by Aisling de Gr\xC3\xA1s",
-                          VITASDR_APP_LABEL, VITASDR_BUILD_REV);
+                          "VitaSDR %s (%s)  -  by Aisling de Gr\xC3\xA1s",
+                          VITASDR_VERSION, VITASDR_REV_LABEL);
     font_drawf(20, cy + 40, COL_DIM, 0.85f,
                           "aisling@hiraeth.club");
     font_drawf(20, cy + 62, COL_DIM, 0.85f,

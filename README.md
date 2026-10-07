@@ -6,10 +6,11 @@ receiver and it streams the audio, tunes it, and shows a live RF waterfall — a
 shortwave/HF (and, via OpenWebRX, VHF) radio in your hands, using someone
 else's antenna over the internet.
 
-> Status: **v0.2.0 — working on real hardware.** Verified on a PS Vita PCH-1000:
+> Status: **v0.3.0 — working on real hardware.** Verified on a PS Vita PCH-1000:
 > browse a live directory of public KiwiSDRs, connect, play audio, tune, and
-> see the waterfall. The radio core also has host-side unit tests. See
-> [Testing status](#testing-status).
+> see the waterfall. v0.3.0 adds a server-picker filter system (free slots, SNR,
+> location, distance) and the OpenWebRX/TLS client (host-validated). The radio
+> core also has host-side unit tests. See [Testing status](#testing-status).
 
 ## What works today
 
@@ -24,6 +25,11 @@ else's antenna over the internet.
 - On-startup **server picker** with the live public KiwiSDR directory, plus a
   user **favourites** list and manual add via the on-screen keyboard — type a
   bare host for a KiwiSDR, or an `https://…` URL for an OpenWebRX
+- **Picker filters** (press L): hide receivers without room for both our
+  connections (free slots ≥ 2), set a minimum SNR, match a location/name
+  substring, or keep only receivers within a distance of a home point you set
+  (as a Maidenhead grid or lat,lon); optional best-first sorting. Favourites are
+  never filtered. Choices persist in `config.ini`
 - **Band-jump selector** (HF amateur/broadcast bands — everything a KiwiSDR can
   reach; VHF bands are omitted until OpenWebRX support lands)
 - Tuning (D-pad step + accelerated analog sweep), mode switching, keepalive
@@ -93,12 +99,13 @@ Radio screen:
 | Circle           | Open the server picker (PS button exits the app)    |
 
 Server picker: **X** connect · **Start** toggle favourite · **Select** add by
-hand · **Square** refresh directory · **Triangle** Settings. Band selector:
+hand · **Square** refresh directory · **L** filters · **Triangle** Settings.
+Band selector:
 Up/Down choose (hold to scroll, L/R skip 5), **X** jump, **Circle** back.
 
 ## Testing status
 
-Verified on the host by `vitasdr_test` (95 assertions):
+Verified on the host by `vitasdr_test` (110 assertions):
 
 - IMA-ADPCM decode against a hand-traced vector
 - jitter buffer FIFO order and drop-oldest overflow

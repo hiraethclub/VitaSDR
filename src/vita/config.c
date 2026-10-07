@@ -16,22 +16,21 @@
 #define CFG_DIR  VITASDR_DATA_DIR
 #define CFG_FILE CFG_DIR "/config.ini"
 
-/* A live public KiwiSDR used as the out-of-the-box default so the app connects
- * on first launch. Change `host`/`port` in config.ini to use your own.
- * NOTE: this is a convenience testing default; for a public release we should
- * either make it clearly configurable or point at a receiver intended for
- * heavy public use rather than a personal one. */
-#define DEFAULT_HOST "gw0kax.proxy.kiwisdr.com"
+/* No baked-in receiver: on first launch the app shows the server picker with
+ * the live public directory, and the chosen receiver becomes the saved host.
+ * (A personal test receiver used to be shipped here; removed for release.) */
+#define DEFAULT_HOST ""
 #define DEFAULT_PORT 8073
 
 /* Hosts we have shipped as defaults in prior builds. If an existing config
- * still holds one of these (or an empty host), it is upgraded to the current
+ * still holds one of these (or an empty host), it is reset to the current
  * DEFAULT_HOST automatically so updates take effect without hand-editing. A
  * host the user typed themselves is never touched. */
 static const char *SHIPPED_DEFAULTS[] = {
-    "kiwisdr.example.com",   /* original placeholder */
-    "kiwisdr.ucsd.edu",      /* earlier default */
-    "shack2.ddns.net"        /* previous default */
+    "kiwisdr.example.com",        /* original placeholder */
+    "kiwisdr.ucsd.edu",           /* earlier default */
+    "shack2.ddns.net",            /* previous default */
+    "gw0kax.proxy.kiwisdr.com"    /* v0.2.x reference receiver */
 };
 
 void config_defaults(app_state *app)

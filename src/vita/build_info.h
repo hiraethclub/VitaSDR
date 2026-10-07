@@ -15,4 +15,12 @@
 #define VITASDR_APP_LABEL "VitaSDR"
 #endif
 
+#ifndef VITASDR_VERSION
+#define VITASDR_VERSION "0.3.0"
+#endif
+
+#ifndef VITASDR_REV_LABEL
+#define VITASDR_REV_LABEL "dev"
+#endif
+
 #endif /* VITASDR_BUILD_INFO_H */

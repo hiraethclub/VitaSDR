@@ -76,16 +76,21 @@ if(VITA)
   ## name) so it installs alongside the stable VitaSDR without clashing.
   ## -DVITASDR_DEV=OFF produces the stable identity.
   option(VITASDR_DEV "Build the separate dev app" ON)
+  ## Human-readable app version, shown on the settings/credits screen as
+  ## "VitaSDR <VERSION> (<REV_LABEL>)". Bump on each release.
+  set(VITASDR_VERSION "0.3.0")
   if(VITASDR_DEV)
     set(VITA_APP_NAME "VitaSDR Dev r${GIT_COUNT}")
     set(VITA_TITLEID  "VSDR00002")
     set(APP_DATA_DIR  "ux0:data/vitasdr-dev")
     set(VPK_FILE      "VitaSDR-dev-r${BUILD_REV}.vpk")
+    set(VITA_REV_LABEL "Dev r${GIT_COUNT}")
   else()
     set(VITA_APP_NAME "VitaSDR")
     set(VITA_TITLEID  "VSDR00001")
     set(APP_DATA_DIR  "ux0:data/vitasdr")
     set(VPK_FILE      "VitaSDR.vpk")
+    set(VITA_REV_LABEL "r${GIT_COUNT}")
   endif()
   set(VITA_VERSION  "01.00")
 
@@ -110,7 +115,9 @@ if(VITA)
   target_compile_definitions(${PROJECT_NAME} PRIVATE
       VITASDR_DATA_DIR="${APP_DATA_DIR}"
       VITASDR_BUILD_REV="${BUILD_REV}"
-      VITASDR_APP_LABEL="${VITA_APP_NAME}")
+      VITASDR_APP_LABEL="${VITA_APP_NAME}"
+      VITASDR_VERSION="${VITASDR_VERSION}"
+      VITASDR_REV_LABEL="${VITA_REV_LABEL}")
 
   target_link_libraries(${PROJECT_NAME}
       bearssl
